@@ -1,0 +1,26 @@
+# Build output
+/build/
+/out/
+*.exe
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake.stamp
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# Data files produced at runtime (WAL etc. come in later phases)
+*.log
+*.wal
+*.rdb
