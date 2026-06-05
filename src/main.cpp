@@ -1,0 +1,68 @@
+// main.cpp — entry point for the `redon-server` executable.
+//
+// Usage:
+//   redon-server                  # listen on 127.0.0.1:6380
+//   redon-server <port>           # listen on 127.0.0.1:<port>
+//   redon-server <host> <port>    # listen on <host>:<port>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <string>
+
+#include "net.h"
+#include "server.h"
+
+namespace {
+
+constexpr std::uint16_t kDefaultPort = 6380;  // Redis uses 6379; +1 to coexist
+const char kDefaultHost[] = "127.0.0.1";
+
+// Parse a port from text. Returns false if it isn't a number in 1..65535.
+bool parse_port(const std::string& text, std::uint16_t* out) {
+    try {
+        std::size_t consumed = 0;
+        int value = std::stoi(text, &consumed);
+        if (consumed != text.size() || value < 1 || value > 65535) {
+            return false;
+        }
+        *out = static_cast<std::uint16_t>(value);
+        return true;
+    } catch (const std::exception&) {
+        return false;  // not a number / out of range
+    }
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    std::string host = kDefaultHost;
+    std::uint16_t port = kDefaultPort;
+
+    // Argument handling: one arg = port; two args = host + port.
+    if (argc == 2) {
+        if (!parse_port(argv[1], &port)) {
+            std::cerr << "error: invalid port '" << argv[1] << "'\n";
+            return 1;
+        }
+    } else if (argc == 3) {
+        host = argv[1];
+        if (!parse_port(argv[2], &port)) {
+            std::cerr << "error: invalid port '" << argv[2] << "'\n";
+            return 1;
+        }
+    } else if (argc > 3) {
+        std::cerr << "usage: redon-server [host] [port]\n";
+        return 1;
+    }
+
+    // Start the sockets library for the lifetime of the program (Windows needs
+    // this; on POSIX it is a no-op).
+    redon::net::Init net_init;
+    if (!net_init.ok()) {
+        std::cerr << "error: failed to initialize sockets library\n";
+        return 1;
+    }
+
+    redon::Server server(host, port);
+    return server.run();
+}
