@@ -27,6 +27,16 @@ std::string trim(const std::string& s) {
            std::isspace(static_cast<unsigned char>(s[begin]))) {
         ++begin;
     }
+    // Skip a leading UTF-8 byte-order mark (EF BB BF) if present. Editors like
+    // Windows Notepad prepend one when saving "UTF-8" files, and isspace()
+    // doesn't treat it as whitespace, so without this the first command of a
+    // piped file would parse as an unknown verb.
+    if (end - begin >= 3 &&
+        static_cast<unsigned char>(s[begin]) == 0xEF &&
+        static_cast<unsigned char>(s[begin + 1]) == 0xBB &&
+        static_cast<unsigned char>(s[begin + 2]) == 0xBF) {
+        begin += 3;
+    }
     while (end > begin &&
            std::isspace(static_cast<unsigned char>(s[end - 1]))) {
         --end;

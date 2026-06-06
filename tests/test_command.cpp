@@ -57,6 +57,14 @@ void test_extra_whitespace_is_tolerated() {
     CHECK_EQ(run(s, "GET k"), std::string("hello world"));
 }
 
+void test_leading_utf8_bom_is_tolerated() {
+    Storage s;
+    // A UTF-8 BOM (EF BB BF) in front of the first command must be ignored, as
+    // happens when piping a Notepad-saved "UTF-8" command file.
+    CHECK_EQ(run(s, "\xEF\xBB\xBF" "SET k v"), std::string("OK"));
+    CHECK_EQ(run(s, "GET k"), std::string("v"));
+}
+
 void test_ping_and_quit() {
     Storage s;
     CHECK_EQ(run(s, "PING"), std::string("PONG"));
@@ -102,6 +110,7 @@ int main() {
     RUN(test_verbs_case_insensitive_and_synonyms);
     RUN(test_crlf_is_tolerated);
     RUN(test_extra_whitespace_is_tolerated);
+    RUN(test_leading_utf8_bom_is_tolerated);
     RUN(test_ping_and_quit);
     RUN(test_no_arg_commands_reject_extra_args);
     RUN(test_argument_and_unknown_errors);
