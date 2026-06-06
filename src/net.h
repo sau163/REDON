@@ -27,6 +27,7 @@
 #else
 #include <arpa/inet.h>
 #include <cerrno>
+#include <csignal>
 #include <cstring>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -93,6 +94,13 @@ public:
         // Request Winsock 2.2.
         ok_ = (::WSAStartup(MAKEWORD(2, 2), &data) == 0);
 #else
+        // Ignore SIGPIPE. On Linux/macOS, calling send() on a socket whose peer
+        // has already closed would otherwise raise SIGPIPE, whose default action
+        // terminates the whole process. With it ignored, send() instead returns
+        // -1 with errno == EPIPE, which our send loops already treat as "the
+        // connection broke". (Windows has no SIGPIPE; it reports the error via
+        // the send() return value directly.)
+        ::signal(SIGPIPE, SIG_IGN);
         ok_ = true;
 #endif
     }
