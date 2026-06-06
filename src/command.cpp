@@ -117,10 +117,16 @@ std::string execute_line(const std::string& line, Storage& store,
     }
 
     if (verb == "PING") {
+        if (!key.empty() || !rest.empty()) {
+            return wrong_args("ping");
+        }
         return "PONG";
     }
 
     if (verb == "QUIT" || verb == "EXIT") {
+        if (!key.empty() || !rest.empty()) {
+            return wrong_args("quit");
+        }
         *should_close = true;
         return "OK";
     }

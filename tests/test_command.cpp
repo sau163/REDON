@@ -70,6 +70,18 @@ void test_ping_and_quit() {
     CHECK(!closed);  // ordinary commands must not request close
 }
 
+void test_no_arg_commands_reject_extra_args() {
+    Storage s;
+    // PING and QUIT take no arguments; extra tokens must be rejected, matching
+    // the strictness of GET/DEL/EXISTS.
+    CHECK_EQ(run(s, "PING extra"),
+             std::string("ERR wrong number of arguments for 'ping' command"));
+    bool closed = false;
+    CHECK_EQ(run(s, "QUIT now", &closed),
+             std::string("ERR wrong number of arguments for 'quit' command"));
+    CHECK(!closed);  // a rejected QUIT must NOT close the connection
+}
+
 void test_argument_and_unknown_errors() {
     Storage s;
     CHECK_EQ(run(s, "SET"),
@@ -91,6 +103,7 @@ int main() {
     RUN(test_crlf_is_tolerated);
     RUN(test_extra_whitespace_is_tolerated);
     RUN(test_ping_and_quit);
+    RUN(test_no_arg_commands_reject_extra_args);
     RUN(test_argument_and_unknown_errors);
     return REPORT();
 }
