@@ -26,6 +26,10 @@ const char kDefaultHost[] = "127.0.0.1";
 // own kMaxLineLength guard so neither side can be memory-exhausted by the peer).
 constexpr std::size_t kMaxLineLength = 64 * 1024;  // 64 KB
 
+// Cap a single send() so casting (len - sent) to int can't overflow on a very
+// large payload; oversized data is simply sent across multiple calls.
+constexpr std::size_t kMaxSendChunk = std::size_t(1) << 30;  // 1 GiB
+
 bool parse_port(const std::string& text, std::uint16_t* out) {
     try {
         std::size_t consumed = 0;
@@ -44,7 +48,11 @@ bool parse_port(const std::string& text, std::uint16_t* out) {
 bool send_all(redon::net::socket_t sock, const char* data, std::size_t len) {
     std::size_t sent = 0;
     while (sent < len) {
-        int n = ::send(sock, data + sent, static_cast<int>(len - sent), 0);
+        std::size_t remaining = len - sent;
+        int to_send = remaining > kMaxSendChunk
+                          ? static_cast<int>(kMaxSendChunk)
+                          : static_cast<int>(remaining);
+        int n = ::send(sock, data + sent, to_send, 0);
         if (n <= 0) {
             return false;
         }

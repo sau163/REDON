@@ -16,13 +16,21 @@ namespace {
 // guard against a misbehaving or malicious peer).
 constexpr std::size_t kMaxLineLength = 64 * 1024;  // 64 KB
 
+// send() takes an int length, so never hand it more than this in a single call.
+// Otherwise casting a >2 GB (len - sent) to int would overflow into a negative
+// number. We just send such data across several calls instead.
+constexpr std::size_t kMaxSendChunk = std::size_t(1) << 30;  // 1 GiB
+
 // Send the whole buffer, looping because a single send() may transmit only part
 // of it. Returns false if the connection broke mid-send.
 bool send_all(net::socket_t sock, const char* data, std::size_t len) {
     std::size_t sent = 0;
     while (sent < len) {
-        int n = ::send(sock, data + sent,
-                       static_cast<int>(len - sent), 0);
+        std::size_t remaining = len - sent;
+        int to_send = remaining > kMaxSendChunk
+                          ? static_cast<int>(kMaxSendChunk)
+                          : static_cast<int>(remaining);
+        int n = ::send(sock, data + sent, to_send, 0);
         if (n <= 0) {
             return false;
         }
