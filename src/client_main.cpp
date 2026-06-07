@@ -21,6 +21,11 @@ namespace {
 constexpr std::uint16_t kDefaultPort = 6380;
 const char kDefaultHost[] = "127.0.0.1";
 
+// A server reply line is small. Refuse to buffer without bound if a broken or
+// hostile server streams data with no newline terminator (mirrors the server's
+// own kMaxLineLength guard so neither side can be memory-exhausted by the peer).
+constexpr std::size_t kMaxLineLength = 64 * 1024;  // 64 KB
+
 bool parse_port(const std::string& text, std::uint16_t* out) {
     try {
         std::size_t consumed = 0;
@@ -60,6 +65,9 @@ bool recv_line(redon::net::socket_t sock, std::string* inbuf,
             return false;  // closed or error
         }
         inbuf->append(chunk, static_cast<std::size_t>(n));
+        if (inbuf->size() > kMaxLineLength) {
+            return false;  // reply line too long: treat as a broken peer
+        }
     }
     *line_out = inbuf->substr(0, newline);
     inbuf->erase(0, newline + 1);
