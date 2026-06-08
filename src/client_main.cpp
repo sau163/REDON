@@ -186,8 +186,13 @@ int main(int argc, char** argv) {
         }
         std::cout << reply << "\n";
 
+        // Leave only if we asked to quit AND the server accepted it. A rejected
+        // "QUIT x" (wrong number of arguments) keeps the connection open on the
+        // server, so the client must stay connected too rather than guessing
+        // from the typed word alone.
         const std::string verb = first_word_upper(line);
-        if (verb == "QUIT" || verb == "EXIT") {
+        const bool server_rejected = (reply.rfind("ERR", 0) == 0);
+        if ((verb == "QUIT" || verb == "EXIT") && !server_rejected) {
             break;
         }
     }
