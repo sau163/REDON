@@ -30,6 +30,10 @@ else()
   add_compile_options(-Wall -Wextra)
 endif()
 
+# Find the system threads library (maps to -pthread on Linux/macOS; a no-op on
+# MSVC). Needed because Phase 2 uses std::thread / std::mutex / condition_variable.
+find_package(Threads REQUIRED)
+
 # An INTERFACE target carrying the src/ include path and, on Windows, the
 # Winsock library. Anything that links it can #include "net.h" and use sockets.
 add_library(redon_net INTERFACE)
@@ -38,14 +42,15 @@ if(WIN32)
   target_link_libraries(redon_net INTERFACE ws2_32)
 endif()
 
-# The core engine: storage + protocol + server. Reused by the server exe and by
-# the tests so we test exactly the code that ships.
+# The core engine: storage + protocol + server + thread pool. Reused by the
+# server exe and by the tests so we test exactly the code that ships.
 add_library(redon_core STATIC
   src/storage.cpp
   src/command.cpp
   src/server.cpp
+  src/thread_pool.cpp
 )
-target_link_libraries(redon_core PUBLIC redon_net)
+target_link_libraries(redon_core PUBLIC redon_net Threads::Threads)
 
 # The server executable.
 add_executable(redon-server src/main.cpp)
@@ -67,3 +72,8 @@ add_executable(test_command tests/test_command.cpp)
 target_link_libraries(test_command PRIVATE redon_core)
 target_include_directories(test_command PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 add_test(NAME command COMMAND test_command)
+
+add_executable(test_thread_pool tests/test_thread_pool.cpp)
+target_link_libraries(test_thread_pool PRIVATE redon_core)
+target_include_directories(test_thread_pool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+add_test(NAME thread_pool COMMAND test_thread_pool)
