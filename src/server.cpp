@@ -1,4 +1,9 @@
-// server.cpp — implementation of the Phase 1 TCP server.
+// server.cpp — implementation of the TCP server.
+//
+// Phase 2: the accept loop hands each accepted client to a ThreadPool, so many
+// clients are served concurrently instead of one at a time. Everything a worker
+// thread touches is either local to its task (its own socket + buffers) or the
+// shared Storage, which is internally locked — so no new locking is needed here.
 #include "server.h"
 
 #include <cstring>
@@ -7,6 +12,7 @@
 #include <utility>
 
 #include "command.h"
+#include "thread_pool.h"
 
 namespace redon {
 namespace {
@@ -48,8 +54,13 @@ bool send_line(net::socket_t sock, const std::string& reply) {
 
 }  // namespace
 
-Server::Server(std::string host, std::uint16_t port)
-    : host_(std::move(host)), port_(port) {}
+Server::Server(std::string host, std::uint16_t port, std::size_t num_workers)
+    : host_(std::move(host)), port_(port), num_workers_(num_workers) {}
+
+void Server::log(const std::string& message) {
+    std::lock_guard<std::mutex> lock(log_mutex_);
+    std::cout << message << "\n";
+}
 
 int Server::run() {
     // 1. Create the listening socket (IPv4, TCP).
@@ -93,21 +104,37 @@ int Server::run() {
     }
 
     std::cout << "Redon server listening on " << host_ << ":" << port_ << "\n";
-    std::cout << "(Phase 1: serving one client at a time. Ctrl+C to stop.)\n";
+    std::cout << "(Phase 2: thread pool of " << num_workers_
+              << " workers. Ctrl+C to stop.)\n";
 
-    // 4. Accept loop: take one client, serve it, then wait for the next.
+    // The pool of worker threads. Created here so it lives for the whole accept
+    // loop; if run() ever returns, its destructor drains and joins the workers.
+    ThreadPool pool(num_workers_);
+
+    // 4. Accept loop: take each client and HAND IT TO THE POOL, then immediately
+    // go back to accepting. A free worker serves the client to completion while
+    // the main thread keeps accepting new connections.
     for (;;) {
         net::socket_t client = ::accept(listen_sock, nullptr, nullptr);
         if (client == net::kInvalidSocket) {
             // A failed accept() is not fatal to the server; log and keep going.
-            std::cerr << "warning: accept failed: " << net::last_error_str()
-                      << "\n";
+            log("warning: accept failed: " + net::last_error_str());
             continue;
         }
-        std::cout << "client connected\n";
-        handle_client(client);
-        net::close_socket(client);
-        std::cout << "client disconnected\n";
+
+        // Capture `this` and the socket handle by value. The lambda runs on a
+        // worker thread; `this` stays valid because the Server outlives the pool.
+        pool.submit([this, client] {
+            int active = active_clients_.fetch_add(1) + 1;
+            log("client connected (active: " + std::to_string(active) + ")");
+
+            handle_client(client);
+
+            net::close_socket(client);
+            int remaining = active_clients_.fetch_sub(1) - 1;
+            log("client disconnected (active: " + std::to_string(remaining) +
+                ")");
+        });
     }
 
     // Unreachable in normal operation.
@@ -131,8 +158,7 @@ void Server::handle_client(net::socket_t client) {
             return;  // peer closed the connection cleanly
         }
         if (n < 0) {
-            std::cerr << "warning: recv failed: " << net::last_error_str()
-                      << "\n";
+            log("warning: recv failed: " + net::last_error_str());
             return;
         }
         inbuf.append(chunk, static_cast<std::size_t>(n));

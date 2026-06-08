@@ -8,7 +8,10 @@
 #ifndef REDON_SERVER_H
 #define REDON_SERVER_H
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 #include "net.h"
@@ -18,7 +21,9 @@ namespace redon {
 
 class Server {
 public:
-    Server(std::string host, std::uint16_t port);
+    // `num_workers` is the size of the thread pool — the number of clients that
+    // can be actively served at the same time.
+    Server(std::string host, std::uint16_t port, std::size_t num_workers);
 
     // Set up the listening socket and run the accept loop. Blocks indefinitely.
     // Returns a non-zero exit code if the socket could not be set up; otherwise
@@ -26,12 +31,22 @@ public:
     int run();
 
 private:
-    // Serve a single connected client until it disconnects or sends QUIT.
+    // Serve a single connected client until it disconnects or sends QUIT. Runs
+    // on a worker thread, so it touches only its own socket plus the shared
+    // (internally locked) Storage.
     void handle_client(net::socket_t client);
+
+    // Print one line to stdout atomically. Worker threads log concurrently, so
+    // without this their output would interleave mid-line.
+    void log(const std::string& message);
 
     std::string host_;
     std::uint16_t port_;
-    Storage store_;  // the one shared database for every client
+    std::size_t num_workers_;
+    Storage store_;  // the one shared database for every client (thread-safe)
+
+    std::mutex log_mutex_;                 // serializes log() output
+    std::atomic<int> active_clients_{0};   // currently-connected client count
 };
 
 }  // namespace redon
