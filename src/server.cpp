@@ -118,6 +118,14 @@ void Server::handle_client(net::socket_t client) {
     char chunk[4096];
 
     for (;;) {
+        // If the unprocessed buffer already holds an over-long partial line,
+        // reject before reading more into it. (A line may run up to one recv()
+        // chunk past the cap before we notice it here, which is acceptable.)
+        if (inbuf.size() > kMaxLineLength) {
+            send_line(client, "ERR line too long");
+            return;
+        }
+
         int n = ::recv(client, chunk, static_cast<int>(sizeof(chunk)), 0);
         if (n == 0) {
             return;  // peer closed the connection cleanly
@@ -145,12 +153,6 @@ void Server::handle_client(net::socket_t client) {
             if (should_close) {
                 return;  // client asked to QUIT
             }
-        }
-
-        // Guard against an unbounded line with no newline terminator.
-        if (inbuf.size() > kMaxLineLength) {
-            send_line(client, "ERR line too long");
-            return;
         }
     }
 }
