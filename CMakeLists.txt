@@ -60,6 +60,10 @@ target_link_libraries(redon-server PRIVATE redon_core)
 add_executable(redon-cli src/client_main.cpp)
 target_link_libraries(redon-cli PRIVATE redon_net)
 
+# A concurrent load generator / benchmark (uses threads + sockets, not the engine).
+add_executable(redon-bench bench/redon_bench.cpp)
+target_link_libraries(redon-bench PRIVATE redon_net Threads::Threads)
+
 # ---- Tests --------------------------------------------------------------
 enable_testing()
 
