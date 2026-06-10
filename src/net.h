@@ -78,6 +78,40 @@ inline std::string last_error_str() {
 #endif
 }
 
+// RAII owner of a socket handle: closes it automatically when destroyed, so a
+// socket can't leak down an error path or while an exception unwinds the stack.
+// Ownership can be handed off with release() (the guard then closes nothing).
+//
+//     SocketCloser guard(sock);   // guard now owns sock
+//     ... code that might return early or throw ...
+//     guard.release();            // success: someone else owns sock now
+//
+class SocketCloser {
+public:
+    explicit SocketCloser(socket_t sock = kInvalidSocket) : sock_(sock) {}
+
+    ~SocketCloser() {
+        if (sock_ != kInvalidSocket) {
+            close_socket(sock_);
+        }
+    }
+
+    SocketCloser(const SocketCloser&) = delete;
+    SocketCloser& operator=(const SocketCloser&) = delete;
+
+    socket_t get() const { return sock_; }
+
+    // Give up ownership without closing; returns the handle for the new owner.
+    socket_t release() {
+        socket_t s = sock_;
+        sock_ = kInvalidSocket;
+        return s;
+    }
+
+private:
+    socket_t sock_;
+};
+
 // RAII guard that initializes the sockets library for the process. On Windows
 // this calls WSAStartup in the constructor and WSACleanup in the destructor; on
 // POSIX it does nothing. Create exactly one at the top of main() and keep it
