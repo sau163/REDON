@@ -6,6 +6,7 @@
 // shared Storage, which is internally locked — so no new locking is needed here.
 #include "server.h"
 
+#include <atomic>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -52,6 +53,25 @@ bool send_line(net::socket_t sock, const std::string& reply) {
     return send_all(sock, out.data(), out.size());
 }
 
+// RAII for one served connection. It bumps the live-connection counter on
+// construction and, on destruction — whether the task returns normally OR an
+// exception unwinds through it — closes the socket and drops the counter. Both
+// cleanup steps are noexcept, so running them in a destructor is safe.
+struct ConnectionScope {
+    std::atomic<int>* counter;
+    net::socket_t sock;
+
+    ConnectionScope(std::atomic<int>* c, net::socket_t s) : counter(c), sock(s) {
+        counter->fetch_add(1);
+    }
+    ~ConnectionScope() {
+        net::close_socket(sock);
+        counter->fetch_sub(1);
+    }
+    ConnectionScope(const ConnectionScope&) = delete;
+    ConnectionScope& operator=(const ConnectionScope&) = delete;
+};
+
 }  // namespace
 
 Server::Server(std::string host, std::uint16_t port, std::size_t num_workers)
@@ -70,6 +90,9 @@ int Server::run() {
                   << net::last_error_str() << "\n";
         return 1;
     }
+    // RAII: closes listen_sock on every path below — early error returns and the
+    // stack unwinding if the ThreadPool constructor throws (e.g. out of threads).
+    net::SocketCloser listen_guard(listen_sock);
 
     // Allow immediate reuse of the address so restarting the server doesn't fail
     // with "address already in use" while the OS holds the port in TIME_WAIT.
@@ -84,14 +107,12 @@ int Server::run() {
     addr.sin_port = htons(port_);
     if (::inet_pton(AF_INET, host_.c_str(), &addr.sin_addr) != 1) {
         std::cerr << "error: invalid host address '" << host_ << "'\n";
-        net::close_socket(listen_sock);
         return 1;
     }
     if (::bind(listen_sock, reinterpret_cast<sockaddr*>(&addr),
                sizeof(addr)) != 0) {
         std::cerr << "error: could not bind " << host_ << ":" << port_ << ": "
                   << net::last_error_str() << "\n";
-        net::close_socket(listen_sock);
         return 1;
     }
 
@@ -99,7 +120,6 @@ int Server::run() {
     if (::listen(listen_sock, SOMAXCONN) != 0) {
         std::cerr << "error: could not listen: " << net::last_error_str()
                   << "\n";
-        net::close_socket(listen_sock);
         return 1;
     }
 
@@ -107,34 +127,65 @@ int Server::run() {
     std::cout << "(Phase 2: thread pool of " << num_workers_
               << " workers. Ctrl+C to stop.)\n";
 
-    // The pool of worker threads. Created here so it lives for the whole accept
-    // loop; if run() ever returns, its destructor drains and joins the workers.
-    ThreadPool pool(num_workers_);
+    // Cap the queue so a connection flood can't pile up unbounded sockets faster
+    // than the workers drain them. Past the cap we reject (and close) new clients.
+    std::size_t max_queued = num_workers_ * 16;
+    if (max_queued < 256) {
+        max_queued = 256;
+    }
 
-    // 4. Accept loop: take each client and HAND IT TO THE POOL, then immediately
-    // go back to accepting. A free worker serves the client to completion while
-    // the main thread keeps accepting new connections.
-    for (;;) {
-        net::socket_t client = ::accept(listen_sock, nullptr, nullptr);
-        if (client == net::kInvalidSocket) {
-            // A failed accept() is not fatal to the server; log and keep going.
-            log("warning: accept failed: " + net::last_error_str());
-            continue;
+    try {
+        // The pool lives for the whole accept loop; if run() returns, its
+        // destructor drains the queue and joins the workers.
+        ThreadPool pool(num_workers_, max_queued);
+
+        // 4. Accept loop: take each client and HAND IT TO THE POOL, then go
+        // straight back to accepting. A free worker serves the client to
+        // completion while the main thread keeps accepting new connections.
+        for (;;) {
+            net::socket_t client = ::accept(listen_sock, nullptr, nullptr);
+            if (client == net::kInvalidSocket) {
+                // A failed accept() is not fatal; log and keep going.
+                log("warning: accept failed: " + net::last_error_str());
+                continue;
+            }
+            // Owns the socket until we successfully hand it to the pool; closes
+            // it if submission fails (overloaded) or throws.
+            net::SocketCloser client_guard(client);
+
+            // Capture `this` and the socket handle by value. The lambda runs on a
+            // worker thread; `this` stays valid because the Server outlives the
+            // pool. ConnectionScope guarantees the socket is closed and the
+            // counter decremented even if handle_client throws.
+            bool submitted = false;
+            try {
+                submitted = pool.submit([this, client] {
+                    ConnectionScope scope(&active_clients_, client);
+                    try {
+                        log("client connected (active: " +
+                            std::to_string(active_clients_.load()) + ")");
+                        handle_client(client);
+                        log("client disconnected (active: " +
+                            std::to_string(active_clients_.load() - 1) + ")");
+                    } catch (...) {
+                        // One client's failure must not crash the worker;
+                        // ConnectionScope still cleans up.
+                    }
+                });
+            } catch (...) {
+                submitted = false;  // e.g. allocation failure building the task
+            }
+
+            if (submitted) {
+                client_guard.release();  // the task now owns the socket
+            } else {
+                log("warning: server overloaded, rejecting client");
+                // client_guard closes the socket as it goes out of scope.
+            }
         }
-
-        // Capture `this` and the socket handle by value. The lambda runs on a
-        // worker thread; `this` stays valid because the Server outlives the pool.
-        pool.submit([this, client] {
-            int active = active_clients_.fetch_add(1) + 1;
-            log("client connected (active: " + std::to_string(active) + ")");
-
-            handle_client(client);
-
-            net::close_socket(client);
-            int remaining = active_clients_.fetch_sub(1) - 1;
-            log("client disconnected (active: " + std::to_string(remaining) +
-                ")");
-        });
+    } catch (const std::exception& e) {
+        std::cerr << "error: thread pool failure: " << e.what() << "\n";
+        return 1;  // listen_guard closes the listening socket
     }
 
     // Unreachable in normal operation.
