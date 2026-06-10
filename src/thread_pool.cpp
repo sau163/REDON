@@ -5,7 +5,8 @@
 
 namespace redon {
 
-ThreadPool::ThreadPool(std::size_t num_threads) {
+ThreadPool::ThreadPool(std::size_t num_threads, std::size_t max_queue_size)
+    : max_queue_size_(max_queue_size) {
     if (num_threads == 0) {
         num_threads = 1;  // a pool with zero workers would never run anything
     }
@@ -31,17 +32,21 @@ ThreadPool::~ThreadPool() {
     }
 }
 
-void ThreadPool::submit(std::function<void()> task) {
+bool ThreadPool::submit(std::function<void()> task) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (stop_) {
-            return;  // shutting down: don't accept more work
+            return false;  // shutting down: don't accept more work
+        }
+        if (max_queue_size_ != 0 && tasks_.size() >= max_queue_size_) {
+            return false;  // queue full: apply backpressure to the caller
         }
         tasks_.push(std::move(task));
     }
     // Wake ONE worker. notify_one (not notify_all) because a single task can be
     // run by a single worker — waking them all would just cause a stampede.
     cv_.notify_one();
+    return true;
 }
 
 void ThreadPool::worker_loop() {
@@ -66,7 +71,17 @@ void ThreadPool::worker_loop() {
         }
         // Run the task with the lock RELEASED, so other workers can pull the
         // next task and run in parallel while this one executes.
-        task();
+        //
+        // Wrap it: a task that throws must NEVER escape this loop, because an
+        // exception leaving a std::thread's function calls std::terminate() and
+        // kills the entire process. Catching here means one bad task at most
+        // fails on its own; the worker survives and keeps serving. (Tasks are
+        // expected to handle their own errors; this is a last-resort safety net.)
+        try {
+            task();
+        } catch (...) {
+            // Swallow: nothing safe to do here, and the worker must live on.
+        }
     }
 }
 

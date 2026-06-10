@@ -31,8 +31,10 @@ namespace redon {
 
 class ThreadPool {
 public:
-    // Start `num_threads` worker threads (forced to at least 1).
-    explicit ThreadPool(std::size_t num_threads);
+    // Start `num_threads` worker threads (forced to at least 1). `max_queue_size`
+    // caps how many tasks may wait in the queue; 0 means unbounded. A bound is
+    // what lets a server apply backpressure instead of accepting work forever.
+    explicit ThreadPool(std::size_t num_threads, std::size_t max_queue_size = 0);
 
     // Stop accepting new work, let the workers finish everything already queued,
     // then join (wait for) every worker thread.
@@ -42,9 +44,10 @@ public:
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
 
-    // Hand a task to the pool. A free worker will run it. Tasks submitted after
-    // shutdown has begun (in the destructor) are ignored.
-    void submit(std::function<void()> task);
+    // Hand a task to the pool for a free worker to run. Returns false (and does
+    // NOT take the task) if the pool is shutting down or the queue is already at
+    // its capacity — the caller then decides what to do (e.g. reject the client).
+    bool submit(std::function<void()> task);
 
     // How many worker threads the pool runs.
     std::size_t size() const { return workers_.size(); }
@@ -56,9 +59,10 @@ private:
     std::vector<std::thread> workers_;
     std::queue<std::function<void()>> tasks_;
 
-    std::mutex mutex_;              // guards tasks_ and stop_
-    std::condition_variable cv_;    // workers wait here for new tasks
-    bool stop_ = false;            // set true once, in the destructor
+    std::mutex mutex_;                  // guards tasks_ and stop_
+    std::condition_variable cv_;        // workers wait here for new tasks
+    bool stop_ = false;                // set true once, in the destructor
+    std::size_t max_queue_size_ = 0;    // 0 = unbounded
 };
 
 }  // namespace redon
