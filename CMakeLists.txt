@@ -49,6 +49,7 @@ add_library(redon_core STATIC
   src/command.cpp
   src/server.cpp
   src/thread_pool.cpp
+  src/wal.cpp
 )
 target_link_libraries(redon_core PUBLIC redon_net Threads::Threads)
 
@@ -81,3 +82,8 @@ add_executable(test_thread_pool tests/test_thread_pool.cpp)
 target_link_libraries(test_thread_pool PRIVATE redon_core)
 target_include_directories(test_thread_pool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 add_test(NAME thread_pool COMMAND test_thread_pool)
+
+add_executable(test_wal tests/test_wal.cpp)
+target_link_libraries(test_wal PRIVATE redon_core)
+target_include_directories(test_wal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+add_test(NAME wal COMMAND test_wal)

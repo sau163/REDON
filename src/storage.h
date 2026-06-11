@@ -19,6 +19,8 @@
 
 namespace redon {
 
+class Wal;  // forward declaration; storage.cpp includes wal.h
+
 class Storage {
 public:
     // Store value under key (overwriting any previous value). Returns nothing
@@ -41,10 +43,18 @@ public:
     // Number of keys currently stored (handy for tests and future metrics).
     std::size_t size() const;
 
+    // Attach a Write-Ahead Log so that future set()/del() calls are recorded to
+    // disk before they take effect. Pass nullptr (the default) for no logging —
+    // which is exactly the state used while REPLAYING a log, so replay doesn't
+    // re-write what it is reading. Not thread-safe; call once at startup before
+    // any client is served.
+    void attach_wal(Wal* wal);
+
 private:
     // `mutable` so we can lock it inside const methods (get/exists/size).
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::string> map_;
+    Wal* wal_ = nullptr;  // not owned; nullptr means "don't log"
 };
 
 }  // namespace redon
