@@ -84,12 +84,12 @@ void ThreadPool::worker_loop() {
             task = std::move(tasks_.front());
             tasks_.pop();
         }                                       // <- lock released HERE
-        task();                                 // run the task WITHOUT the lock
+        try { task(); } catch (...) {}          // run WITHOUT the lock; see #3
     }
 }
 ```
 
-Two subtleties worth really understanding:
+Three subtleties worth really understanding:
 
 1. **`cv_.wait(lock, predicate)`** atomically *unlocks* the mutex and puts the
    thread to sleep, then *re-locks* it when woken. The predicate
@@ -100,6 +100,12 @@ Two subtleties worth really understanding:
    `task()`). If we held the lock while running the task, only one worker could
    ever run at a time — defeating the whole purpose. Releasing it first is what
    lets the workers run in parallel.
+3. **The task runs inside `try { } catch (...) {}`.** If an exception escapes a
+   thread's function, C++ calls `std::terminate()` and the *whole server dies*.
+   Catching here means a single failing task (say a `std::bad_alloc` under memory
+   pressure) can't take the worker — or the server — down with it. The pool's
+   queue is also **bounded**: `submit()` returns `false` when full, so a flood of
+   connections is rejected (back-pressure) instead of piling up forever.
 
 `submit()` is the mirror image: lock, push the task, unlock, then
 `cv_.notify_one()` to wake exactly one sleeping worker. The destructor sets
@@ -142,6 +148,22 @@ The production-grade answer to both is **asynchronous I/O** (one thread juggling
 thousands of connections via `epoll`/`IOCP`), which trades simplicity for scale —
 a topic for a much later phase. The thread pool is the right tool to *learn* the
 concurrency primitives first.
+
+### No graceful shutdown (yet)
+
+The accept loop calls a **blocking** `accept()` with no timeout, and the only way
+to stop the server is Ctrl+C, which terminates the whole process. There is
+deliberately no "finish in-flight work, then exit cleanly" path yet: the
+`ThreadPool` destructor *can* drain and join, but it never runs because the main
+thread is parked inside `accept()`.
+
+That's fine for Phase 1–2 (there's nothing that *must* be flushed on the way
+out). It starts to matter in **Phase 3**, where a Write-Ahead Log should be
+flushed to disk on shutdown — so graceful shutdown (an interruptible accept via a
+self-pipe / `select`, plus a signal handler that sets a stop flag) is something
+we'll add then, when there's a concrete reason to. The resource-safety pieces it
+depends on are already in place: the listening and per-client sockets are owned
+by RAII guards, and the pool already drains-then-joins on destruction.
 
 ## Proving it works — `redon-bench`
 
