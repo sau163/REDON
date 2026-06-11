@@ -55,14 +55,14 @@ void test_get_leaves_out_param_untouched_when_missing() {
 // holding one of the values that was legitimately written — never garbage.
 void test_concurrent_same_key_access() {
     Storage s;
-    const int num_threads = 8;
-    const int iterations = 20000;
-    const int num_keys = 16;
+    constexpr int num_threads = 8;
+    constexpr int iterations = 20000;
+    constexpr int num_keys = 16;
 
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
     for (int t = 0; t < num_threads; ++t) {
-        threads.emplace_back([&s, t]() {
+        threads.emplace_back([&s, t, iterations, num_keys]() {
             const std::string value = "t" + std::to_string(t);
             std::string out;
             for (int i = 0; i < iterations; ++i) {
