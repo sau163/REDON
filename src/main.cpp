@@ -1,10 +1,15 @@
 // main.cpp — entry point for the `redon-server` executable.
 //
 // Usage:
-//   redon-server                          # 127.0.0.1:6380, default thread count
-//   redon-server <port>                   # 127.0.0.1:<port>
-//   redon-server <host> <port>            # <host>:<port>
-//   redon-server <host> <port> <threads>  # ...with a custom worker-pool size
+//   redon-server                                 # 127.0.0.1:6380, default workers
+//   redon-server <port>                          # 127.0.0.1:<port>
+//   redon-server <host> <port>                   # <host>:<port>
+//   redon-server <host> <port> <threads>         # ...custom worker-pool size
+//   redon-server <host> <port> <threads> <wal>   # ...custom WAL path
+//                                                #   (use "none" to disable it)
+//
+// The WAL (Write-Ahead Log) file defaults to "redon.wal" — data persists across
+// restarts. Pass "none" as the <wal> argument for an in-memory-only server.
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -63,33 +68,37 @@ int main(int argc, char** argv) {
     std::string host = kDefaultHost;
     std::uint16_t port = kDefaultPort;
     std::size_t workers = default_workers();
+    std::string wal_path = "redon.wal";  // persistence on by default
 
-    // Positional args: [host] [port] [threads]. A bare port is allowed as the
-    // single-arg form; the thread count requires host and port to be given too.
-    if (argc == 2) {
-        if (!parse_port(argv[1], &port)) {
-            std::cerr << "error: invalid port '" << argv[1] << "'\n";
-            return 1;
+    // Positional args: [host] [port] [threads] [wal]. A bare port is allowed as
+    // the single-arg form; later options require the earlier ones to be given.
+    if (argc >= 2) {
+        // For argc==2 the lone argument is the port; otherwise argv[1] is host.
+        if (argc == 2) {
+            if (!parse_port(argv[1], &port)) {
+                std::cerr << "error: invalid port '" << argv[1] << "'\n";
+                return 1;
+            }
+        } else {
+            host = argv[1];
+            if (!parse_port(argv[2], &port)) {
+                std::cerr << "error: invalid port '" << argv[2] << "'\n";
+                return 1;
+            }
         }
-    } else if (argc == 3) {
-        host = argv[1];
-        if (!parse_port(argv[2], &port)) {
-            std::cerr << "error: invalid port '" << argv[2] << "'\n";
-            return 1;
-        }
-    } else if (argc == 4) {
-        host = argv[1];
-        if (!parse_port(argv[2], &port)) {
-            std::cerr << "error: invalid port '" << argv[2] << "'\n";
-            return 1;
-        }
+    }
+    if (argc >= 4) {
         if (!parse_workers(argv[3], &workers)) {
             std::cerr << "error: invalid thread count '" << argv[3]
                       << "' (expected 1..4096)\n";
             return 1;
         }
-    } else if (argc > 4) {
-        std::cerr << "usage: redon-server [host] [port] [threads]\n";
+    }
+    if (argc >= 5) {
+        wal_path = argv[4];
+    }
+    if (argc > 5) {
+        std::cerr << "usage: redon-server [host] [port] [threads] [wal]\n";
         return 1;
     }
 
@@ -101,6 +110,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    redon::Server server(host, port, workers);
+    redon::Server server(host, port, workers, wal_path);
     return server.run();
 }

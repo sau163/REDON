@@ -9,11 +9,13 @@
 #include <atomic>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "command.h"
 #include "thread_pool.h"
+#include "wal.h"
 
 namespace redon {
 namespace {
@@ -74,15 +76,55 @@ struct ConnectionScope {
 
 }  // namespace
 
-Server::Server(std::string host, std::uint16_t port, std::size_t num_workers)
-    : host_(std::move(host)), port_(port), num_workers_(num_workers) {}
+Server::Server(std::string host, std::uint16_t port, std::size_t num_workers,
+               std::string wal_path)
+    : host_(std::move(host)),
+      port_(port),
+      num_workers_(num_workers),
+      wal_path_(std::move(wal_path)) {}
+
+// Defined here (where Wal is complete) so unique_ptr<Wal> can be destroyed.
+Server::~Server() = default;
 
 void Server::log(const std::string& message) {
     std::lock_guard<std::mutex> lock(log_mutex_);
     std::cout << message << "\n";
 }
 
+bool Server::setup_persistence() {
+    // Persistence off?
+    if (wal_path_.empty() || wal_path_ == "none" || wal_path_ == "-") {
+        std::cout << "Persistence: disabled (in-memory only)\n";
+        return true;
+    }
+
+    wal_ = std::make_unique<Wal>(wal_path_);
+
+    // 1. Rebuild state from any existing log BEFORE the WAL is attached, so the
+    //    replayed set()/del() calls don't get re-logged.
+    std::size_t replayed = wal_->replay_into(store_);
+
+    // 2. Open the log for appending new writes.
+    if (!wal_->open_for_append()) {
+        std::cerr << "error: could not open WAL file '" << wal_path_
+                  << "' for writing\n";
+        return false;
+    }
+
+    // 3. Attach it so every future SET/DEL is recorded before it takes effect.
+    store_.attach_wal(wal_.get());
+
+    std::cout << "Persistence: " << wal_path_ << " (replayed " << replayed
+              << " record" << (replayed == 1 ? "" : "s") << ")\n";
+    return true;
+}
+
 int Server::run() {
+    // 0. Load any persisted data and arm the WAL before accepting clients.
+    if (!setup_persistence()) {
+        return 1;
+    }
+
     // 1. Create the listening socket (IPv4, TCP).
     net::socket_t listen_sock = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_sock == net::kInvalidSocket) {
@@ -124,8 +166,11 @@ int Server::run() {
     }
 
     std::cout << "Redon server listening on " << host_ << ":" << port_ << "\n";
-    std::cout << "(Phase 2: thread pool of " << num_workers_
+    std::cout << "(thread pool of " << num_workers_
               << " workers. Ctrl+C to stop.)\n";
+    // Flush the startup banner now: stdout is block-buffered when redirected to a
+    // file, and an abrupt kill would otherwise discard these lines.
+    std::cout.flush();
 
     // Cap the queue so a connection flood can't pile up unbounded sockets faster
     // than the workers drain them. Past the cap we reject (and close) new clients.

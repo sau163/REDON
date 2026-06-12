@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -19,11 +20,20 @@
 
 namespace redon {
 
+class Wal;  // forward declaration; server.cpp includes wal.h
+
 class Server {
 public:
     // `num_workers` is the size of the thread pool — the number of clients that
-    // can be actively served at the same time.
-    Server(std::string host, std::uint16_t port, std::size_t num_workers);
+    // can be actively served at the same time. `wal_path` is the Write-Ahead Log
+    // file for persistence; pass an empty string (or "none"/"-") to run purely
+    // in memory with no durability.
+    Server(std::string host, std::uint16_t port, std::size_t num_workers,
+           std::string wal_path);
+
+    // Declared (not defaulted inline) so the std::unique_ptr<Wal> member can be
+    // destroyed in server.cpp, where Wal is a complete type.
+    ~Server();
 
     // Set up the listening socket and run the accept loop. Blocks indefinitely.
     // Returns a non-zero exit code if the socket could not be set up; otherwise
@@ -40,9 +50,15 @@ private:
     // without this their output would interleave mid-line.
     void log(const std::string& message);
 
+    // Replay the WAL into store_ and attach it for future writes. Returns false
+    // only on a fatal error (e.g. the log file can't be opened for appending).
+    bool setup_persistence();
+
     std::string host_;
     std::uint16_t port_;
     std::size_t num_workers_;
+    std::string wal_path_;            // empty / "none" / "-" => persistence off
+    std::unique_ptr<Wal> wal_;        // owns the log; attached to store_
     Storage store_;  // the one shared database for every client (thread-safe)
 
     std::mutex log_mutex_;                 // serializes log() output
