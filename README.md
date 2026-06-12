@@ -17,7 +17,7 @@ phase — it is always a working program, just with more capabilities each time.
 |------:|--------------|----------------------------|
 | **1** ✅ | TCP server, `SET`/`GET`/`DEL`/`EXISTS`, in-memory storage | Talking to clients over a network |
 | **2** ✅ | Thread pool | Serving thousands of clients at once |
-| 3 | Write-Ahead Log (WAL) | Surviving a crash without losing data |
+| **3** ✅ | Write-Ahead Log (WAL) | Surviving a crash without losing data |
 | 4 | LRU eviction | Staying within a memory budget |
 | 5 | Replication | Surviving a whole machine dying |
 | 6 | Raft leader election | Agreeing who is in charge (consensus) |
@@ -25,9 +25,10 @@ phase — it is always a working program, just with more capabilities each time.
 | 8 | RocksDB backend | Millions of keys, fast restart |
 | 9 | Metrics dashboard | Seeing what the system is doing |
 
-> **You are here: Phase 2 is complete.** The server now serves many clients
-> concurrently via a thread pool. See [docs/PHASE1.md](docs/PHASE1.md) and
-> [docs/PHASE2.md](docs/PHASE2.md) for line-by-line explanations.
+> **You are here: Phase 3 is complete.** The server serves many clients
+> concurrently *and* persists data to disk, so it survives a crash. See
+> [docs/PHASE1.md](docs/PHASE1.md), [docs/PHASE2.md](docs/PHASE2.md), and
+> [docs/PHASE3.md](docs/PHASE3.md) for line-by-line explanations.
 
 ---
 
@@ -35,8 +36,9 @@ phase — it is always a working program, just with more capabilities each time.
 
 Three programs:
 
-- **`redon-server`** — listens on a TCP port and stores keys in memory, serving
-  many clients at once via a thread pool (Phase 2).
+- **`redon-server`** — listens on a TCP port and stores keys, serving many
+  clients at once via a thread pool (Phase 2) and persisting writes to a
+  Write-Ahead Log so they survive a crash (Phase 3).
 - **`redon-cli`** — a tiny client you can type commands into (so you don't need
   `telnet` or `netcat` installed).
 - **`redon-bench`** — a concurrent load generator that opens many connections at
@@ -106,13 +108,32 @@ if you also have Redis installed). Override the host, port, and worker-thread
 count:
 
 ```sh
-redon-server 7000                 # listen on port 7000, default thread count
-redon-server 127.0.0.1 7000 1024  # ...with 1024 workers (for many clients)
-redon-cli 127.0.0.1 7000          # client connects to that port
+redon-server 7000                      # listen on port 7000, default workers
+redon-server 127.0.0.1 7000 1024       # ...with 1024 workers (for many clients)
+redon-server 127.0.0.1 7000 64 my.wal  # ...with a custom WAL file
+redon-server 127.0.0.1 7000 64 none    # ...with persistence OFF (in-memory only)
+redon-cli 127.0.0.1 7000               # client connects to that port
 ```
 
 The worker-thread count is how many clients are served **at the same time**
-(it defaults to your CPU's thread count). See [docs/PHASE2.md](docs/PHASE2.md).
+(defaults to your CPU's thread count). See [docs/PHASE2.md](docs/PHASE2.md).
+
+## Persistence (it survives a crash)
+
+By default the server writes every `SET`/`DEL` to a **Write-Ahead Log**
+(`redon.wal`) and replays it on startup, so your data survives a restart — even
+an abrupt one:
+
+```sh
+redon-server &                 # WAL on by default (redon.wal)
+redon-cli  # SET name Saurabh ; QUIT
+# ...kill the server however you like...
+redon-server &                 # replays redon.wal on startup
+redon-cli  # GET name  ->  Saurabh     (it came back!)
+```
+
+Pass `none` as the 4th argument to disable persistence. See
+[docs/PHASE3.md](docs/PHASE3.md) for how the WAL works.
 
 ## Benchmark it
 
@@ -135,17 +156,20 @@ Redon/
 │   ├── storage.h/.cpp    # the key-value storage engine (the "database" itself)
 │   ├── command.h/.cpp    # parse a line of text into a command and run it
 │   ├── thread_pool.h/.cpp# worker pool: queue + mutex + condition_variable (Phase 2)
+│   ├── wal.h/.cpp        # Write-Ahead Log: append + replay for durability (Phase 3)
 │   ├── server.h/.cpp     # TCP server: accept clients, hand each to the pool
 │   ├── main.cpp          # entry point for redon-server
 │   └── client_main.cpp   # entry point for redon-cli
 ├── bench/
 │   └── redon_bench.cpp   # concurrent load generator (redon-bench)
 ├── tests/
-│   ├── test_storage.cpp     # tests for the storage engine
+│   ├── test_storage.cpp     # tests for the storage engine (+ concurrency)
 │   ├── test_command.cpp     # tests for the protocol (parse + execute)
-│   └── test_thread_pool.cpp # tests for the worker pool
+│   ├── test_thread_pool.cpp # tests for the worker pool
+│   └── test_wal.cpp         # tests for the Write-Ahead Log (replay + recovery)
 ├── docs/
 │   ├── PHASE1.md         # how Phase 1 works, explained
-│   └── PHASE2.md         # how Phase 2 (concurrency) works, explained
+│   ├── PHASE2.md         # how Phase 2 (concurrency) works, explained
+│   └── PHASE3.md         # how Phase 3 (persistence) works, explained
 └── CMakeLists.txt        # build configuration
 ```
