@@ -10,16 +10,19 @@
 
 namespace redon {
 
-void Storage::set(const std::string& key, const std::string& value) {
+bool Storage::set(const std::string& key, const std::string& value) {
     std::lock_guard<std::mutex> lock(mutex_);
     // Write-ahead: record the change to the log BEFORE applying it in memory.
     // Doing this under the same lock that guards the map guarantees the log's
     // order matches the apply order, so a replay rebuilds an identical state.
-    if (wal_ != nullptr) {
-        wal_->append_set(key, value);
+    // If the durable write fails, refuse the mutation entirely so memory and the
+    // log never diverge — and report the failure to the caller.
+    if (wal_ != nullptr && !wal_->append_set(key, value)) {
+        return false;
     }
     map_[key] = value;
     // Phase 5 will add: replicate("SET", key, value);
+    return true;
 }
 
 bool Storage::get(const std::string& key, std::string* out) const {
@@ -32,15 +35,22 @@ bool Storage::get(const std::string& key, std::string* out) const {
     return true;
 }
 
-std::size_t Storage::del(const std::string& key) {
+std::size_t Storage::del(const std::string& key, bool* durable) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (durable != nullptr) {
+        *durable = true;
+    }
     auto it = map_.find(key);
     if (it == map_.end()) {
-        return 0;  // nothing to remove, and nothing worth logging
+        return 0;  // nothing to remove (a no-op is trivially durable)
     }
-    // Write-ahead: log the delete before removing it from memory.
-    if (wal_ != nullptr) {
-        wal_->append_del(key);
+    // Write-ahead: log the delete before removing it. If the durable write
+    // fails, refuse the removal and report it, leaving memory == log.
+    if (wal_ != nullptr && !wal_->append_del(key)) {
+        if (durable != nullptr) {
+            *durable = false;
+        }
+        return 0;
     }
     map_.erase(it);
     return 1;

@@ -78,10 +78,10 @@ bool Wal::open_for_append() {
     return ok_;
 }
 
-void Wal::append_set(const std::string& key, const std::string& value) {
+bool Wal::append_set(const std::string& key, const std::string& value) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!ok_) {
-        return;
+        return false;  // a prior write failed; we can't promise durability
     }
     out_ << "SET " << key.size() << " " << value.size() << " ";
     out_.write(key.data(), static_cast<std::streamsize>(key.size()));
@@ -90,13 +90,15 @@ void Wal::append_set(const std::string& key, const std::string& value) {
     out_.flush();  // push to the OS so a process crash can't lose this write
     if (!out_) {
         ok_ = false;  // a failed write means we can no longer guarantee durability
+        return false;
     }
+    return true;
 }
 
-void Wal::append_del(const std::string& key) {
+bool Wal::append_del(const std::string& key) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!ok_) {
-        return;
+        return false;
     }
     out_ << "DEL " << key.size() << " ";
     out_.write(key.data(), static_cast<std::streamsize>(key.size()));
@@ -104,7 +106,9 @@ void Wal::append_del(const std::string& key) {
     out_.flush();
     if (!out_) {
         ok_ = false;
+        return false;
     }
+    return true;
 }
 
 }  // namespace redon

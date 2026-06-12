@@ -48,6 +48,29 @@ void test_replay_reconstructs_state() {
     cleanup();
 }
 
+// If the WAL can't be written (here: never opened for append), a SET must FAIL
+// rather than silently apply to memory and lie to the client. Memory must stay
+// consistent with the (empty) log.
+void test_set_fails_when_wal_not_writable() {
+    cleanup();
+    Storage s;
+    Wal wal(kPath);
+    // Deliberately skip open_for_append(): the stream is not writable.
+    s.attach_wal(&wal);
+
+    CHECK(!s.set("k", "v"));    // durable write failed -> set reports failure
+    CHECK(!s.exists("k"));       // ...and the mutation was NOT applied
+    CHECK(!wal.ok());            // the WAL marks itself unhealthy
+
+    // DEL of an existing key must likewise refuse and report non-durable. (Seed
+    // a key directly via a writable WAL would re-open it; instead verify a
+    // missing-key delete is still treated as durable no-op.)
+    bool durable = true;
+    CHECK_EQ(s.del("absent", &durable), static_cast<std::size_t>(0));
+    CHECK(durable);             // deleting a missing key is a durable no-op
+    cleanup();
+}
+
 // A missing log file is a normal first start: replay does nothing, no error.
 void test_missing_file_is_a_fresh_start() {
     cleanup();
@@ -114,6 +137,7 @@ void test_truncated_trailing_record_is_ignored() {
 
 int main() {
     RUN(test_replay_reconstructs_state);
+    RUN(test_set_fails_when_wal_not_writable);
     RUN(test_missing_file_is_a_fresh_start);
     RUN(test_value_with_spaces_survives);
     RUN(test_truncated_trailing_record_is_ignored);

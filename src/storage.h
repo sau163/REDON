@@ -23,9 +23,11 @@ class Wal;  // forward declaration; storage.cpp includes wal.h
 
 class Storage {
 public:
-    // Store value under key (overwriting any previous value). Returns nothing
-    // because SET always "succeeds" at this layer.
-    void set(const std::string& key, const std::string& value);
+    // Store value under key (overwriting any previous value). Returns true on
+    // success; returns false WITHOUT changing memory if a Write-Ahead Log is
+    // attached and the durable write failed — so memory never diverges from the
+    // log, and the caller can tell the client the write was not persisted.
+    bool set(const std::string& key, const std::string& value);
 
     // Look up key. Writes the value into *out and returns true if found;
     // returns false and leaves *out untouched if the key is absent.
@@ -34,8 +36,10 @@ public:
     bool get(const std::string& key, std::string* out) const;
 
     // Remove key. Returns the number of keys actually removed (0 or 1), which
-    // mirrors how Redis's DEL reports its result.
-    std::size_t del(const std::string& key);
+    // mirrors how Redis's DEL reports its result. If `durable` is given, it is
+    // set to false (and the removal is NOT applied) when a WAL write failed;
+    // otherwise true. A delete of a missing key is always durable (it's a no-op).
+    std::size_t del(const std::string& key, bool* durable = nullptr);
 
     // Returns true if key is present.
     bool exists(const std::string& key) const;

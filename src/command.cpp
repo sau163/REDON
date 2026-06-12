@@ -97,7 +97,10 @@ std::string execute_line(const std::string& line, Storage& store,
         if (key.empty() || rest.empty()) {
             return wrong_args("set");
         }
-        store.set(key, rest);
+        if (!store.set(key, rest)) {
+            // The durable write failed: never claim success we can't back.
+            return "ERR write failed: data not persisted";
+        }
         return "OK";
     }
 
@@ -116,7 +119,12 @@ std::string execute_line(const std::string& line, Storage& store,
         if (key.empty() || !rest.empty()) {
             return wrong_args("del");
         }
-        return "(integer) " + std::to_string(store.del(key));
+        bool durable = true;
+        std::size_t removed = store.del(key, &durable);
+        if (!durable) {
+            return "ERR write failed: data not persisted";
+        }
+        return "(integer) " + std::to_string(removed);
     }
 
     if (verb == "EXISTS") {

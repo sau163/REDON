@@ -42,11 +42,14 @@ public:
     // the file could not be opened. Call after replay_into().
     bool open_for_append();
 
-    // Append one record and flush it so a process crash can't lose it. These are
-    // called by Storage while it holds its own lock, but they also take the WAL's
-    // own lock so the file is never written by two threads at once.
-    void append_set(const std::string& key, const std::string& value);
-    void append_del(const std::string& key);
+    // Append one record and flush it so a process crash can't lose it. Returns
+    // true if the record was durably written, false if the write failed (e.g.
+    // the disk is full) — in which case the caller must NOT apply the change in
+    // memory, so disk and memory never diverge. Called by Storage under its own
+    // lock; these also take the WAL's lock so the file is never written by two
+    // threads at once.
+    bool append_set(const std::string& key, const std::string& value);
+    bool append_del(const std::string& key);
 
     // False once a write has failed (e.g. the disk is full).
     bool ok() const { return ok_; }
