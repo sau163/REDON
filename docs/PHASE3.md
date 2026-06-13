@@ -91,12 +91,19 @@ Here is the part that's easy to get wrong. The WAL append happens **inside
 `Storage`'s mutex**, in the same critical section as the map update:
 
 ```cpp
-void Storage::set(const std::string& key, const std::string& value) {
+bool Storage::set(const std::string& key, const std::string& value) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (wal_) wal_->append_set(key, value);   // log FIRST...
-    map_[key] = value;                          // ...then apply, both under the lock
+    if (wal_ && !wal_->append_set(key, value))   // log FIRST; if the write fails...
+        return false;                            // ...refuse the change (memory == log)
+    map_[key] = value;                            // otherwise apply, under the same lock
+    return true;
 }
 ```
+
+(If the durable write fails — e.g. the disk is full — `set` returns `false`
+*without* touching memory, and the command layer replies `ERR write failed`
+rather than `OK`. That keeps the promise honest: you only ever get `OK` for data
+that's actually on disk, and memory never drifts out of sync with the log.)
 
 Why does this matter? Imagine logging *outside* the lock with many worker threads:
 
@@ -159,8 +166,15 @@ Our demo (force-killing the process) is exactly the "process crash" case, which
   and flushes to disk, all mutations are serialized on that disk write — so SET
   throughput drops once persistence is on (the cost of durability). Reads (GET)
   that don't touch the WAL are unaffected in spirit, though they share the lock.
-- **A failed write is only flagged, not recovered.** If the disk fills mid-write,
-  the WAL marks itself not-`ok()` and stops; we don't yet surface that to clients.
+- **A failed write stops accepting mutations, but doesn't auto-recover.** A failed
+  append (disk full) is now surfaced — the change is refused and the client gets
+  `ERR write failed` instead of a false `OK` — but once the WAL is unhealthy it
+  stays that way until restart; there's no retry/heal logic yet.
+- **Replay stops at the first corruption** rather than trying to resynchronize and
+  recover records after a corrupt one. That's a deliberate, conservative choice
+  (the common crash case is a *truncated* tail, where there's nothing after to
+  recover anyway); the trade-off is that genuine mid-file corruption discards the
+  remainder.
 
 ## Proving it works
 
