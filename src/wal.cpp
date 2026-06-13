@@ -31,12 +31,17 @@ std::size_t Wal::replay_into(Storage& store) {
             std::size_t key_len = 0;
             std::size_t val_len = 0;
             if (!(in >> key_len >> val_len)) {
-                break;  // header truncated
+                break;  // header truncated or non-numeric
             }
-            if (key_len > kMaxField || val_len > kMaxField) {
-                break;  // corrupt length
+            // Lengths must be non-zero (keys/values are never empty) and sane.
+            // A zero or absurd length means corruption, not a real record.
+            if (key_len == 0 || val_len == 0 ||
+                key_len > kMaxField || val_len > kMaxField) {
+                break;
             }
-            in.get();  // consume the single space before the data
+            if (in.get() != ' ') {
+                break;  // missing/corrupt delimiter before the data
+            }
             std::string key(key_len, '\0');
             std::string val(val_len, '\0');
             in.read(&key[0], static_cast<std::streamsize>(key_len));
@@ -44,7 +49,9 @@ std::size_t Wal::replay_into(Storage& store) {
             if (!in) {
                 break;  // record cut short by a crash: ignore this partial record
             }
-            in.get();  // consume the trailing '\n'
+            if (in.get() != '\n') {
+                break;  // missing terminator: incomplete or corrupt record
+            }
             store.set(key, val);
             ++applied;
         } else if (op == "DEL") {
@@ -52,16 +59,20 @@ std::size_t Wal::replay_into(Storage& store) {
             if (!(in >> key_len)) {
                 break;
             }
-            if (key_len > kMaxField) {
+            if (key_len == 0 || key_len > kMaxField) {
                 break;
             }
-            in.get();
+            if (in.get() != ' ') {
+                break;
+            }
             std::string key(key_len, '\0');
             in.read(&key[0], static_cast<std::streamsize>(key_len));
             if (!in) {
                 break;
             }
-            in.get();
+            if (in.get() != '\n') {
+                break;
+            }
             store.del(key);
             ++applied;
         } else {

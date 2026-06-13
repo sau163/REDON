@@ -135,11 +135,57 @@ void test_truncated_trailing_record_is_ignored() {
     cleanup();
 }
 
+// A record whose data is fully present but whose trailing newline is missing
+// (a crash that wrote the bytes but not the terminator) must be ignored.
+void test_record_without_terminator_is_ignored() {
+    cleanup();
+    {
+        Storage s;
+        Wal wal(kPath);
+        wal.replay_into(s);
+        CHECK(wal.open_for_append());
+        s.attach_wal(&wal);
+        s.set("a", "1");
+    }
+    {
+        std::ofstream f(kPath, std::ios::out | std::ios::app | std::ios::binary);
+        f << "SET 1 1 b2";  // complete data, but NO trailing newline
+    }
+    Storage restored;
+    Wal wal2(kPath);
+    std::size_t replayed = wal2.replay_into(restored);
+    CHECK_EQ(replayed, static_cast<std::size_t>(1));
+    CHECK(restored.exists("a"));
+    CHECK(!restored.exists("b"));  // unterminated record not applied
+    cleanup();
+}
+
+// A corrupt record (here a zero-length key) halts replay safely: the good
+// record before it is applied, and replay stops rather than misreading on.
+void test_corrupt_record_halts_replay() {
+    cleanup();
+    {
+        std::ofstream f(kPath, std::ios::out | std::ios::binary);
+        f << "SET 1 1 a1\n";  // valid
+        f << "SET 0 1 b\n";   // corrupt: zero-length key
+        f << "SET 1 1 c3\n";  // valid bytes, but sits after the corruption
+    }
+    Storage s;
+    Wal wal(kPath);
+    std::size_t replayed = wal.replay_into(s);
+    CHECK_EQ(replayed, static_cast<std::size_t>(1));  // stops at the bad record
+    CHECK(s.exists("a"));
+    CHECK(!s.exists("c"));  // conservative: nothing after corruption is applied
+    cleanup();
+}
+
 int main() {
     RUN(test_replay_reconstructs_state);
     RUN(test_set_fails_when_wal_not_writable);
     RUN(test_missing_file_is_a_fresh_start);
     RUN(test_value_with_spaces_survives);
     RUN(test_truncated_trailing_record_is_ignored);
+    RUN(test_record_without_terminator_is_ignored);
+    RUN(test_corrupt_record_halts_replay);
     return REPORT();
 }
