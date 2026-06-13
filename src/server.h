@@ -27,9 +27,11 @@ public:
     // `num_workers` is the size of the thread pool — the number of clients that
     // can be actively served at the same time. `wal_path` is the Write-Ahead Log
     // file for persistence; pass an empty string (or "none"/"-") to run purely
-    // in memory with no durability.
+    // in memory with no durability. `idle_timeout_seconds` disconnects a client
+    // that sends nothing for that long (0 disables it), so a stalled connection
+    // can't hold a worker forever.
     Server(std::string host, std::uint16_t port, std::size_t num_workers,
-           std::string wal_path);
+           std::string wal_path, int idle_timeout_seconds);
 
     // Declared (not defaulted inline) so the std::unique_ptr<Wal> member can be
     // destroyed in server.cpp, where Wal is a complete type.
@@ -57,6 +59,7 @@ private:
     std::string host_;
     std::uint16_t port_;
     std::size_t num_workers_;
+    int idle_timeout_seconds_;        // 0 => no idle timeout
     std::string wal_path_;            // empty / "none" / "-" => persistence off
     std::unique_ptr<Wal> wal_;        // owns the log; attached to store_
     Storage store_;  // the one shared database for every client (thread-safe)

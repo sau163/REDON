@@ -4,12 +4,14 @@
 //   redon-server                                 # 127.0.0.1:6380, default workers
 //   redon-server <port>                          # 127.0.0.1:<port>
 //   redon-server <host> <port>                   # <host>:<port>
-//   redon-server <host> <port> <threads>         # ...custom worker-pool size
-//   redon-server <host> <port> <threads> <wal>   # ...custom WAL path
-//                                                #   (use "none" to disable it)
+//   redon-server <host> <port> <threads>             # ...custom worker-pool size
+//   redon-server <host> <port> <threads> <wal>       # ...custom WAL path
+//   redon-server <host> <port> <threads> <wal> <idle># ...custom idle timeout
 //
 // The WAL (Write-Ahead Log) file defaults to "redon.wal" — data persists across
 // restarts. Pass "none" as the <wal> argument for an in-memory-only server.
+// <idle> is the seconds a client may sit idle before being disconnected
+// (default 300; 0 disables it), like Redis's `timeout` directive.
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -62,6 +64,21 @@ std::size_t default_workers() {
     return hw != 0 ? static_cast<std::size_t>(hw) : 8;
 }
 
+// Parse an idle-timeout in seconds: 0 (disabled) up to one day.
+bool parse_timeout(const std::string& text, int* out) {
+    try {
+        std::size_t consumed = 0;
+        long value = std::stol(text, &consumed);
+        if (consumed != text.size() || value < 0 || value > 86400) {
+            return false;
+        }
+        *out = static_cast<int>(value);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -69,6 +86,7 @@ int main(int argc, char** argv) {
     std::uint16_t port = kDefaultPort;
     std::size_t workers = default_workers();
     std::string wal_path = "redon.wal";  // persistence on by default
+    int idle_timeout = 300;              // seconds; 0 disables
 
     // Positional args: [host] [port] [threads] [wal]. A bare port is allowed as
     // the single-arg form; later options require the earlier ones to be given.
@@ -97,8 +115,16 @@ int main(int argc, char** argv) {
     if (argc >= 5) {
         wal_path = argv[4];
     }
-    if (argc > 5) {
-        std::cerr << "usage: redon-server [host] [port] [threads] [wal]\n";
+    if (argc >= 6) {
+        if (!parse_timeout(argv[5], &idle_timeout)) {
+            std::cerr << "error: invalid idle timeout '" << argv[5]
+                      << "' (expected 0..86400 seconds)\n";
+            return 1;
+        }
+    }
+    if (argc > 6) {
+        std::cerr
+            << "usage: redon-server [host] [port] [threads] [wal] [idle]\n";
         return 1;
     }
 
@@ -110,6 +136,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    redon::Server server(host, port, workers, wal_path);
+    redon::Server server(host, port, workers, wal_path, idle_timeout);
     return server.run();
 }

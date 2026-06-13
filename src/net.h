@@ -32,6 +32,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -75,6 +76,46 @@ inline std::string last_error_str() {
 #else
     return std::string(std::strerror(code)) + " (errno " +
            std::to_string(code) + ")";
+#endif
+}
+
+// Make recv() on this socket give up after `seconds` of silence instead of
+// blocking forever. This is how we reap idle/slow clients (Redis's `timeout`
+// directive) so a stalled connection can't tie up a worker thread for good.
+// seconds <= 0 leaves the socket blocking (no timeout).
+inline void set_recv_timeout(socket_t sock, int seconds) {
+    if (seconds <= 0) {
+        return;
+    }
+#if defined(_WIN32)
+    DWORD ms = static_cast<DWORD>(seconds) * 1000u;  // Windows wants milliseconds
+    ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char*>(&ms), sizeof(ms));
+#else
+    struct timeval tv;
+    tv.tv_sec = seconds;
+    tv.tv_usec = 0;
+    ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char*>(&tv), sizeof(tv));
+#endif
+}
+
+// Enable TCP keepalive (Redis enables this by default) so a peer that silently
+// vanishes — machine crash, cable pull — is eventually detected by the OS and
+// the connection torn down, instead of lingering forever.
+inline void set_keepalive(socket_t sock) {
+    int on = 1;
+    ::setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE,
+                 reinterpret_cast<const char*>(&on), sizeof(on));
+}
+
+// True if `code` (from last_error()) means "recv timed out" — set by
+// set_recv_timeout() — as opposed to a genuine connection error.
+inline bool is_timeout_error(int code) {
+#if defined(_WIN32)
+    return code == WSAETIMEDOUT;
+#else
+    return code == EAGAIN || code == EWOULDBLOCK;
 #endif
 }
 

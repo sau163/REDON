@@ -77,10 +77,11 @@ struct ConnectionScope {
 }  // namespace
 
 Server::Server(std::string host, std::uint16_t port, std::size_t num_workers,
-               std::string wal_path)
+               std::string wal_path, int idle_timeout_seconds)
     : host_(std::move(host)),
       port_(port),
       num_workers_(num_workers),
+      idle_timeout_seconds_(idle_timeout_seconds),
       wal_path_(std::move(wal_path)) {}
 
 // Defined here (where Wal is complete) so unique_ptr<Wal> can be destroyed.
@@ -88,7 +89,9 @@ Server::~Server() = default;
 
 void Server::log(const std::string& message) {
     std::lock_guard<std::mutex> lock(log_mutex_);
-    std::cout << message << "\n";
+    // Flush: these are infrequent connection-level events, and a log you can't
+    // see (because it's stuck in a buffer when the process is killed) is useless.
+    std::cout << message << std::endl;
 }
 
 bool Server::setup_persistence() {
@@ -166,8 +169,13 @@ int Server::run() {
     }
 
     std::cout << "Redon server listening on " << host_ << ":" << port_ << "\n";
-    std::cout << "(thread pool of " << num_workers_
-              << " workers. Ctrl+C to stop.)\n";
+    std::cout << "(thread pool of " << num_workers_ << " workers; ";
+    if (idle_timeout_seconds_ > 0) {
+        std::cout << "idle timeout " << idle_timeout_seconds_ << "s";
+    } else {
+        std::cout << "no idle timeout";
+    }
+    std::cout << ". Ctrl+C to stop.)\n";
     // Flush the startup banner now: stdout is block-buffered when redirected to a
     // file, and an abrupt kill would otherwise discard these lines.
     std::cout.flush();
@@ -194,6 +202,12 @@ int Server::run() {
                 log("warning: accept failed: " + net::last_error_str());
                 continue;
             }
+            // Keepalive detects a peer that silently vanishes; the recv timeout
+            // disconnects a client that just sits there sending nothing, so it
+            // can't hold a worker hostage.
+            net::set_keepalive(client);
+            net::set_recv_timeout(client, idle_timeout_seconds_);
+
             // Owns the socket until we successfully hand it to the pool; closes
             // it if submission fails (overloaded) or throws.
             net::SocketCloser client_guard(client);
@@ -254,7 +268,13 @@ void Server::handle_client(net::socket_t client) {
             return;  // peer closed the connection cleanly
         }
         if (n < 0) {
-            log("warning: recv failed: " + net::last_error_str());
+            // A receive timeout means the client went idle; close it rather than
+            // hold the worker. Anything else is a genuine connection error.
+            if (net::is_timeout_error(net::last_error())) {
+                log("client idle timeout, closing connection");
+            } else {
+                log("warning: recv failed: " + net::last_error_str());
+            }
             return;
         }
         inbuf.append(chunk, static_cast<std::size_t>(n));
