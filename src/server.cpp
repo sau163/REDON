@@ -77,12 +77,14 @@ struct ConnectionScope {
 }  // namespace
 
 Server::Server(std::string host, std::uint16_t port, std::size_t num_workers,
-               std::string wal_path, int idle_timeout_seconds)
+               std::string wal_path, int idle_timeout_seconds,
+               std::size_t capacity)
     : host_(std::move(host)),
       port_(port),
       num_workers_(num_workers),
       idle_timeout_seconds_(idle_timeout_seconds),
-      wal_path_(std::move(wal_path)) {}
+      wal_path_(std::move(wal_path)),
+      store_(capacity) {}
 
 // Defined here (where Wal is complete) so unique_ptr<Wal> can be destroyed.
 Server::~Server() = default;
@@ -174,6 +176,11 @@ int Server::run() {
         std::cout << "idle timeout " << idle_timeout_seconds_ << "s";
     } else {
         std::cout << "no idle timeout";
+    }
+    if (store_.capacity() > 0) {
+        std::cout << "; capacity " << store_.capacity() << " keys (LRU)";
+    } else {
+        std::cout << "; unbounded";
     }
     std::cout << ". Ctrl+C to stop.)\n";
     // Flush the startup banner now: stdout is block-buffered when redirected to a

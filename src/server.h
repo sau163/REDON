@@ -29,9 +29,10 @@ public:
     // file for persistence; pass an empty string (or "none"/"-") to run purely
     // in memory with no durability. `idle_timeout_seconds` disconnects a client
     // that sends nothing for that long (0 disables it), so a stalled connection
-    // can't hold a worker forever.
+    // can't hold a worker forever. `capacity` is the LRU bound — the cache holds
+    // at most that many keys (0 = unbounded).
     Server(std::string host, std::uint16_t port, std::size_t num_workers,
-           std::string wal_path, int idle_timeout_seconds);
+           std::string wal_path, int idle_timeout_seconds, std::size_t capacity);
 
     // Declared (not defaulted inline) so the std::unique_ptr<Wal> member can be
     // destroyed in server.cpp, where Wal is a complete type.

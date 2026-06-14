@@ -4,14 +4,16 @@
 //   redon-server                                 # 127.0.0.1:6380, default workers
 //   redon-server <port>                          # 127.0.0.1:<port>
 //   redon-server <host> <port>                   # <host>:<port>
-//   redon-server <host> <port> <threads>             # ...custom worker-pool size
-//   redon-server <host> <port> <threads> <wal>       # ...custom WAL path
-//   redon-server <host> <port> <threads> <wal> <idle># ...custom idle timeout
+//   redon-server <host> <port> <threads>                  # ...worker-pool size
+//   redon-server <host> <port> <threads> <wal>            # ...WAL path
+//   redon-server <host> <port> <threads> <wal> <idle>     # ...idle timeout
+//   redon-server <host> <port> <threads> <wal> <idle> <cap># ...LRU capacity
 //
 // The WAL (Write-Ahead Log) file defaults to "redon.wal" — data persists across
 // restarts. Pass "none" as the <wal> argument for an in-memory-only server.
 // <idle> is the seconds a client may sit idle before being disconnected
-// (default 300; 0 disables it), like Redis's `timeout` directive.
+// (default 300; 0 disables it), like Redis's `timeout` directive. <cap> is the
+// LRU capacity in keys (default 0 = unbounded), like Redis's `maxmemory`.
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -79,6 +81,21 @@ bool parse_timeout(const std::string& text, int* out) {
     }
 }
 
+// Parse an LRU capacity in keys: 0 (unbounded) or any positive count.
+bool parse_capacity(const std::string& text, std::size_t* out) {
+    try {
+        std::size_t consumed = 0;
+        unsigned long long value = std::stoull(text, &consumed);
+        if (consumed != text.size()) {
+            return false;
+        }
+        *out = static_cast<std::size_t>(value);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -87,6 +104,7 @@ int main(int argc, char** argv) {
     std::size_t workers = default_workers();
     std::string wal_path = "redon.wal";  // persistence on by default
     int idle_timeout = 300;              // seconds; 0 disables
+    std::size_t capacity = 0;            // LRU bound in keys; 0 = unbounded
 
     // Positional args: [host] [port] [threads] [wal]. A bare port is allowed as
     // the single-arg form; later options require the earlier ones to be given.
@@ -122,9 +140,16 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
-    if (argc > 6) {
-        std::cerr
-            << "usage: redon-server [host] [port] [threads] [wal] [idle]\n";
+    if (argc >= 7) {
+        if (!parse_capacity(argv[6], &capacity)) {
+            std::cerr << "error: invalid capacity '" << argv[6]
+                      << "' (expected a non-negative integer)\n";
+            return 1;
+        }
+    }
+    if (argc > 7) {
+        std::cerr << "usage: redon-server [host] [port] [threads] [wal] [idle] "
+                     "[capacity]\n";
         return 1;
     }
 
@@ -136,6 +161,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    redon::Server server(host, port, workers, wal_path, idle_timeout);
+    redon::Server server(host, port, workers, wal_path, idle_timeout, capacity);
     return server.run();
 }
