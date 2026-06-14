@@ -108,12 +108,17 @@ if you also have Redis installed). Override the host, port, and worker-thread
 count:
 
 ```sh
-redon-server 7000                      # listen on port 7000, default workers
-redon-server 127.0.0.1 7000 1024       # ...with 1024 workers (for many clients)
-redon-server 127.0.0.1 7000 64 my.wal  # ...with a custom WAL file
-redon-server 127.0.0.1 7000 64 none    # ...with persistence OFF (in-memory only)
-redon-cli 127.0.0.1 7000               # client connects to that port
+redon-server 7000                       # listen on port 7000, default workers
+redon-server 127.0.0.1 7000 1024        # ...with 1024 workers (for many clients)
+redon-server 127.0.0.1 7000 64 my.wal   # ...with a custom WAL file
+redon-server 127.0.0.1 7000 64 none     # ...with persistence OFF (in-memory only)
+redon-server 127.0.0.1 7000 64 my.wal 60# ...disconnect clients idle > 60s
+redon-cli 127.0.0.1 7000                # client connects to that port
 ```
+
+The 5th argument is the **idle timeout** in seconds (default 300, `0` to
+disable) — a client that sends nothing for that long is disconnected, like
+Redis's `timeout`. Connections also use TCP keepalive to detect dead peers.
 
 The worker-thread count is how many clients are served **at the same time**
 (defaults to your CPU's thread count). See [docs/PHASE2.md](docs/PHASE2.md).

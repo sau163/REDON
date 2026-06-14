@@ -141,8 +141,13 @@ task waits in the queue until a worker frees up. Consequences:
 - To serve 1000+ truly simultaneous clients you raise the worker count:
   `redon-server 127.0.0.1 6380 1024`. Each thread costs ~1 MB of stack, so 1000
   threads ≈ 1 GB — feasible but heavy.
-- A single idle client that connects but never sends anything ties up a worker
-  forever (a "slowloris"). A few of those could exhaust a small pool.
+- A slow or idle client that connects but sends little or nothing would tie up a
+  worker. This is now **mitigated the way Redis does it**: each connection gets a
+  **recv timeout** (Redis's `timeout`, default 300 s) so an idle client is
+  disconnected, plus **TCP keepalive** to detect a peer that vanishes — and the
+  bounded queue caps how many connections can pile up. (A determined attacker
+  dribbling one byte per timeout window is still possible; the complete answer is
+  async I/O, later.)
 
 The production-grade answer to both is **asynchronous I/O** (one thread juggling
 thousands of connections via `epoll`/`IOCP`), which trades simplicity for scale —
@@ -157,13 +162,13 @@ deliberately no "finish in-flight work, then exit cleanly" path yet: the
 `ThreadPool` destructor *can* drain and join, but it never runs because the main
 thread is parked inside `accept()`.
 
-That's fine for Phase 1–2 (there's nothing that *must* be flushed on the way
-out). It starts to matter in **Phase 3**, where a Write-Ahead Log should be
-flushed to disk on shutdown — so graceful shutdown (an interruptible accept via a
-self-pipe / `select`, plus a signal handler that sets a stop flag) is something
-we'll add then, when there's a concrete reason to. The resource-safety pieces it
-depends on are already in place: the listening and per-client sockets are owned
-by RAII guards, and the pool already drains-then-joins on destruction.
+That's fine for Phase 1–2. We *expected* it to matter in **Phase 3** (flushing a
+log on the way out) — but it turned out the Write-Ahead Log flushes after *every*
+write, so an abrupt kill is already safe and graceful shutdown is **not needed for
+durability**. It remains optional polish (tidy logs, prompt resource release); the
+OS reclaims everything on exit anyway. The pieces it would need are already in
+place: sockets are owned by RAII guards and the pool drains-then-joins on
+destruction.
 
 ## Proving it works — `redon-bench`
 
