@@ -179,8 +179,34 @@ void test_corrupt_record_halts_replay() {
     cleanup();
 }
 
+// An LRU eviction is logged as a DEL, and replay reconstructs the same key set
+// (the evicted key stays gone, the survivors come back) without double-evicting.
+void test_eviction_is_logged_and_replayed() {
+    cleanup();
+    {
+        Storage s(2);  // capacity 2
+        Wal wal(kPath);
+        wal.replay_into(s);
+        CHECK(wal.open_for_append());
+        s.attach_wal(&wal);
+        s.set("a", "1");
+        s.set("b", "2");
+        s.set("c", "3");  // over capacity -> evict "a", logged as DEL a
+        CHECK(!s.exists("a"));
+    }
+    Storage restored(2);
+    Wal wal2(kPath);
+    wal2.replay_into(restored);
+    CHECK(!restored.exists("a"));  // the eviction was logged and replayed
+    CHECK(restored.exists("b"));
+    CHECK(restored.exists("c"));
+    CHECK_EQ(restored.size(), static_cast<std::size_t>(2));  // no double-evict
+    cleanup();
+}
+
 int main() {
     RUN(test_replay_reconstructs_state);
+    RUN(test_eviction_is_logged_and_replayed);
     RUN(test_set_fails_when_wal_not_writable);
     RUN(test_missing_file_is_a_fresh_start);
     RUN(test_value_with_spaces_survives);

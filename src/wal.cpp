@@ -24,6 +24,12 @@ std::size_t Wal::replay_into(Storage& store) {
         return 0;  // no log yet: a fresh database
     }
 
+    // Suppress LRU eviction while replaying: the log already records exactly
+    // which keys were evicted (as DELs), so the cache must not re-derive
+    // evictions from the (read-blind) replay recency. Restored to live mode at
+    // the end, which also trims to capacity if the bound was reduced.
+    store.set_replaying(true);
+
     std::size_t applied = 0;
     std::string op;
     while (in >> op) {  // reads a whitespace-delimited token (SET / DEL)
@@ -79,6 +85,8 @@ std::size_t Wal::replay_into(Storage& store) {
             break;  // unrecognized op: stop at the first sign of corruption
         }
     }
+
+    store.set_replaying(false);  // back to live mode (trims to capacity if needed)
     return applied;
 }
 

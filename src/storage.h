@@ -1,21 +1,30 @@
-// storage.h — Redon's storage engine (the "database" itself).
+// storage.h — Redon's storage engine, now an LRU (least-recently-used) cache.
 //
-// Phase 1: an in-memory key->value map. We hide it behind a class so that in
-// later phases set()/del() can ALSO write to a Write-Ahead Log (Phase 3) and
-// forward changes to replicas (Phase 5) without any caller having to change.
+// Phase 1-3 used a plain hash map. Phase 4 bounds memory: when a capacity is set
+// and the cache is full, inserting a NEW key evicts the least-recently-used one.
 //
-// It is already thread-safe (every method locks a mutex). Phase 1 serves one
-// client at a time so this isn't strictly required yet, but Phase 2 adds many
-// worker threads sharing this one Storage object, and an std::unordered_map
-// read+written by two threads at once is undefined behavior. Locking now means
-// Phase 2 needs no changes here.
+// The classic O(1) LRU design, two structures kept in sync:
+//   * a doubly-linked list of (key,value) ordered by recency — most-recently-used
+//     at the FRONT, least-recently-used at the BACK.
+//   * a hash map from key -> that key's node in the list.
+// Moving a node to the front (on use) and dropping the back node (on eviction)
+// are both O(1) because the map hands us the node directly. "Used" = read (get)
+// or written (set). Capacity 0 means unbounded (no eviction) — the default.
+//
+// Persistence interaction (Phase 3 + 4): an eviction is logged to the WAL as a
+// DEL so the log stays consistent with memory; during replay eviction is
+// SUPPRESSED so only the logged DELs remove keys (the log already records exactly
+// which keys were evicted — replay can't re-derive that, since it never sees the
+// read-driven recency).
 #ifndef REDON_STORAGE_H
 #define REDON_STORAGE_H
 
 #include <cstddef>
+#include <list>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace redon {
 
@@ -23,42 +32,60 @@ class Wal;  // forward declaration; storage.cpp includes wal.h
 
 class Storage {
 public:
-    // Store value under key (overwriting any previous value). Returns true on
-    // success; returns false WITHOUT changing memory if a Write-Ahead Log is
-    // attached and the durable write failed — so memory never diverges from the
-    // log, and the caller can tell the client the write was not persisted.
+    // capacity 0 = unbounded (never evict). Otherwise the cache holds at most
+    // `capacity` keys, evicting the least-recently-used to stay within it.
+    explicit Storage(std::size_t capacity = 0);
+
+    // Store value under key and mark it most-recently-used. Inserting a new key
+    // when full evicts the least-recently-used key. Returns false WITHOUT
+    // changing memory if a WAL is attached and the durable write failed.
     bool set(const std::string& key, const std::string& value);
 
-    // Look up key. Writes the value into *out and returns true if found;
-    // returns false and leaves *out untouched if the key is absent.
-    // (We return a bool rather than a value so callers can tell "" apart from
-    // "missing" — an empty string is a perfectly valid stored value.)
-    bool get(const std::string& key, std::string* out) const;
+    // Look up key. On a hit, mark it most-recently-used and write the value to
+    // *out; on a miss return false and leave *out untouched. NOT const: a
+    // successful read updates recency.
+    bool get(const std::string& key, std::string* out);
 
-    // Remove key. Returns the number of keys actually removed (0 or 1), which
-    // mirrors how Redis's DEL reports its result. If `durable` is given, it is
-    // set to false (and the removal is NOT applied) when a WAL write failed;
-    // otherwise true. A delete of a missing key is always durable (it's a no-op).
+    // Remove key. Returns the number removed (0 or 1). If `durable` is given it
+    // is set false (and the removal skipped) when a WAL write failed; deleting a
+    // missing key is always a durable no-op.
     std::size_t del(const std::string& key, bool* durable = nullptr);
 
-    // Returns true if key is present.
+    // True if key is present. Does NOT change recency — a mere existence check
+    // isn't really a "use" — so it stays const.
     bool exists(const std::string& key) const;
 
-    // Number of keys currently stored (handy for tests and future metrics).
+    // Number of keys currently stored.
     std::size_t size() const;
 
-    // Attach a Write-Ahead Log so that future set()/del() calls are recorded to
-    // disk before they take effect. Pass nullptr (the default) for no logging —
-    // which is exactly the state used while REPLAYING a log, so replay doesn't
-    // re-write what it is reading. Not thread-safe; call once at startup before
-    // any client is served.
+    // The capacity bound (0 = unbounded).
+    std::size_t capacity() const { return capacity_; }
+
+    // Attach a Write-Ahead Log so future set/del (and evictions) are recorded.
+    // Pass nullptr (the default) for no logging — the state used during replay.
     void attach_wal(Wal* wal);
 
+    // Toggle replay mode. While replaying a log, eviction is SUPPRESSED so only
+    // the explicitly-logged DEL records remove keys (replay can't see the
+    // original read-driven recency, so re-deriving evictions would pick the wrong
+    // keys). Turning replay mode OFF trims any excess down to capacity (unlogged)
+    // — which only matters if capacity was reduced since the log was written.
+    void set_replaying(bool replaying);
+
 private:
-    // `mutable` so we can lock it inside const methods (get/exists/size).
+    using Item = std::pair<std::string, std::string>;  // (key, value)
+    using ListIt = std::list<Item>::iterator;
+
+    // Evict the least-recently-used key. Caller must hold mutex_ and ensure the
+    // cache is non-empty. `log_eviction` controls whether a DEL is written.
+    void evict_lru_locked(bool log_eviction);
+
     mutable std::mutex mutex_;
-    std::unordered_map<std::string, std::string> map_;
-    Wal* wal_ = nullptr;  // not owned; nullptr means "don't log"
+    std::list<Item> items_;                          // front = MRU, back = LRU
+    std::unordered_map<std::string, ListIt> index_;  // key -> its list node
+    std::size_t capacity_ = 0;                       // 0 = unbounded
+    bool replaying_ = false;                          // suppress eviction in replay
+    Wal* wal_ = nullptr;                             // not owned; nullptr = no log
 };
 
 }  // namespace redon
