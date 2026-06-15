@@ -81,18 +81,20 @@ bool parse_timeout(const std::string& text, int* out) {
     }
 }
 
-// Parse an LRU capacity in keys: 0 (unbounded) or any positive count.
+// Parse an LRU capacity in keys: 0 (unbounded) or any positive count. Parse as
+// signed so a negative like "-1" is rejected rather than wrapping to a huge
+// unsigned value (std::stoull would silently accept "-1" as SIZE_MAX).
 bool parse_capacity(const std::string& text, std::size_t* out) {
     try {
         std::size_t consumed = 0;
-        unsigned long long value = std::stoull(text, &consumed);
-        if (consumed != text.size()) {
+        long long value = std::stoll(text, &consumed);
+        if (consumed != text.size() || value < 0) {
             return false;
         }
         *out = static_cast<std::size_t>(value);
         return true;
     } catch (const std::exception&) {
-        return false;
+        return false;  // not a number / out of range
     }
 }
 
