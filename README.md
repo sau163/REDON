@@ -18,17 +18,18 @@ phase — it is always a working program, just with more capabilities each time.
 | **1** ✅ | TCP server, `SET`/`GET`/`DEL`/`EXISTS`, in-memory storage | Talking to clients over a network |
 | **2** ✅ | Thread pool | Serving thousands of clients at once |
 | **3** ✅ | Write-Ahead Log (WAL) | Surviving a crash without losing data |
-| 4 | LRU eviction | Staying within a memory budget |
+| **4** ✅ | LRU eviction | Staying within a memory budget |
 | 5 | Replication | Surviving a whole machine dying |
 | 6 | Raft leader election | Agreeing who is in charge (consensus) |
 | 7 | Sharding | Storing more data than one machine holds |
 | 8 | RocksDB backend | Millions of keys, fast restart |
 | 9 | Metrics dashboard | Seeing what the system is doing |
 
-> **You are here: Phase 3 is complete.** The server serves many clients
-> concurrently *and* persists data to disk, so it survives a crash. See
-> [docs/PHASE1.md](docs/PHASE1.md), [docs/PHASE2.md](docs/PHASE2.md), and
-> [docs/PHASE3.md](docs/PHASE3.md) for line-by-line explanations.
+> **You are here: Phase 4 is complete.** The server serves many clients
+> concurrently, persists data so it survives a crash, *and* can bound its memory
+> with an LRU cache. See [docs/PHASE1.md](docs/PHASE1.md),
+> [docs/PHASE2.md](docs/PHASE2.md), [docs/PHASE3.md](docs/PHASE3.md), and
+> [docs/PHASE4.md](docs/PHASE4.md) for line-by-line explanations.
 
 ---
 
@@ -112,13 +113,17 @@ redon-server 7000                       # listen on port 7000, default workers
 redon-server 127.0.0.1 7000 1024        # ...with 1024 workers (for many clients)
 redon-server 127.0.0.1 7000 64 my.wal   # ...with a custom WAL file
 redon-server 127.0.0.1 7000 64 none     # ...with persistence OFF (in-memory only)
-redon-server 127.0.0.1 7000 64 my.wal 60# ...disconnect clients idle > 60s
+redon-server 127.0.0.1 7000 64 my.wal 60 # ...disconnect clients idle > 60s
+redon-server 127.0.0.1 7000 64 my.wal 300 1000 # ...cap the cache at 1000 keys
 redon-cli 127.0.0.1 7000                # client connects to that port
 ```
 
 The 5th argument is the **idle timeout** in seconds (default 300, `0` to
 disable) — a client that sends nothing for that long is disconnected, like
 Redis's `timeout`. Connections also use TCP keepalive to detect dead peers.
+The 6th argument is the **LRU capacity** in keys (default `0` = unbounded, like
+Redis's `maxmemory`): past it, the least-recently-used key is evicted. See
+[docs/PHASE4.md](docs/PHASE4.md).
 
 The worker-thread count is how many clients are served **at the same time**
 (defaults to your CPU's thread count). See [docs/PHASE2.md](docs/PHASE2.md).
@@ -158,7 +163,7 @@ server's worker count up to roughly your core count.
 Redon/
 ├── src/
 │   ├── net.h             # cross-platform socket helpers (Winsock <-> POSIX)
-│   ├── storage.h/.cpp    # the key-value storage engine (the "database" itself)
+│   ├── storage.h/.cpp    # the storage engine: an O(1) LRU cache (Phase 4)
 │   ├── command.h/.cpp    # parse a line of text into a command and run it
 │   ├── thread_pool.h/.cpp# worker pool: queue + mutex + condition_variable (Phase 2)
 │   ├── wal.h/.cpp        # Write-Ahead Log: append + replay for durability (Phase 3)
@@ -175,6 +180,7 @@ Redon/
 ├── docs/
 │   ├── PHASE1.md         # how Phase 1 works, explained
 │   ├── PHASE2.md         # how Phase 2 (concurrency) works, explained
-│   └── PHASE3.md         # how Phase 3 (persistence) works, explained
+│   ├── PHASE3.md         # how Phase 3 (persistence) works, explained
+│   └── PHASE4.md         # how Phase 4 (LRU eviction) works, explained
 └── CMakeLists.txt        # build configuration
 ```
