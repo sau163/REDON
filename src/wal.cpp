@@ -13,6 +13,18 @@ namespace {
 // so this is generously above anything legitimate.
 constexpr std::size_t kMaxField = 256u * 1024 * 1024;  // 256 MB
 
+// RAII: put a Storage into replay mode for the duration of a replay and restore
+// live mode in the destructor — even if an exception unwinds the stack. Without
+// this, a throw mid-replay (e.g. std::bad_alloc) would leave replaying_ stuck
+// true, permanently disabling eviction.
+struct ReplayGuard {
+    Storage& store;
+    explicit ReplayGuard(Storage& s) : store(s) { store.set_replaying(true); }
+    ~ReplayGuard() { store.set_replaying(false); }
+    ReplayGuard(const ReplayGuard&) = delete;
+    ReplayGuard& operator=(const ReplayGuard&) = delete;
+};
+
 }  // namespace
 
 Wal::Wal(std::string path) : path_(std::move(path)) {}
@@ -26,9 +38,10 @@ std::size_t Wal::replay_into(Storage& store) {
 
     // Suppress LRU eviction while replaying: the log already records exactly
     // which keys were evicted (as DELs), so the cache must not re-derive
-    // evictions from the (read-blind) replay recency. Restored to live mode at
-    // the end, which also trims to capacity if the bound was reduced.
-    store.set_replaying(true);
+    // evictions from the (read-blind) replay recency. The guard restores live
+    // mode (which also trims to capacity if the bound shrank) on every exit path,
+    // including an exception.
+    ReplayGuard replay_guard(store);
 
     std::size_t applied = 0;
     std::string op;
@@ -86,8 +99,7 @@ std::size_t Wal::replay_into(Storage& store) {
         }
     }
 
-    store.set_replaying(false);  // back to live mode (trims to capacity if needed)
-    return applied;
+    return applied;  // replay_guard restores live mode (and trims) on the way out
 }
 
 bool Wal::open_for_append() {
