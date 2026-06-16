@@ -3,6 +3,7 @@
 
 #include <utility>
 
+#include "replication.h"
 #include "wal.h"
 
 namespace redon {
@@ -24,13 +25,19 @@ bool Storage::set(const std::string& key, const std::string& value) {
         // Existing key: overwrite its value and move it to the front (MRU).
         it->second->second = value;
         items_.splice(items_.begin(), items_, it->second);
+        if (replicator_ != nullptr) {
+            replicator_->replicate_set(key, value);
+        }
         return true;
     }
 
-    // New key: insert at the front, then evict the least-recently-used while we
-    // are over capacity (live only; replay suppresses eviction).
+    // New key: insert at the front, replicate it, then evict the least-recently-
+    // used while we are over capacity (live only; replay suppresses eviction).
     items_.emplace_front(key, value);
     index_.emplace(key, items_.begin());
+    if (replicator_ != nullptr) {
+        replicator_->replicate_set(key, value);
+    }
     while (!replaying_ && capacity_ > 0 && index_.size() > capacity_) {
         evict_lru_locked(true);
     }
@@ -65,6 +72,9 @@ std::size_t Storage::del(const std::string& key, bool* durable) {
         }
         return 0;
     }
+    if (replicator_ != nullptr) {
+        replicator_->replicate_del(key);
+    }
     items_.erase(it->second);
     index_.erase(it);
     return 1;
@@ -85,6 +95,28 @@ void Storage::attach_wal(Wal* wal) {
     wal_ = wal;
 }
 
+void Storage::attach_replicator(Replicator* replicator) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    replicator_ = replicator;
+}
+
+std::vector<std::pair<std::string, std::string>> Storage::snapshot_locked(
+    const std::function<void()>& while_locked) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::pair<std::string, std::string>> snap(items_.begin(),
+                                                          items_.end());
+    if (while_locked) {
+        while_locked();  // e.g. the replicator marks the follower "streaming"
+    }
+    return snap;
+}
+
+void Storage::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    items_.clear();
+    index_.clear();
+}
+
 void Storage::set_replaying(bool replaying) {
     std::lock_guard<std::mutex> lock(mutex_);
     replaying_ = replaying;
@@ -101,11 +133,17 @@ void Storage::set_replaying(bool replaying) {
 void Storage::evict_lru_locked(bool log_eviction) {
     // Copy the key out before pop_back destroys the node.
     const std::string evicted = items_.back().first;
-    // Keep the log consistent with memory: record the eviction as a delete.
-    // Best-effort — if it fails the key is still evicted to honor capacity, and
-    // the WAL marks itself unhealthy so the next client write is rejected.
-    if (log_eviction && wal_ != nullptr) {
-        wal_->append_del(evicted);
+    if (log_eviction) {
+        // Keep the log AND the followers consistent with memory: record the
+        // eviction as a delete. Best-effort for the WAL — if it fails the key is
+        // still evicted to honor capacity, and the WAL marks itself unhealthy so
+        // the next client write is rejected.
+        if (wal_ != nullptr) {
+            wal_->append_del(evicted);
+        }
+        if (replicator_ != nullptr) {
+            replicator_->replicate_del(evicted);
+        }
     }
     index_.erase(evicted);
     items_.pop_back();

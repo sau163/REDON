@@ -20,15 +20,18 @@
 #define REDON_STORAGE_H
 
 #include <cstddef>
+#include <functional>
 #include <list>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace redon {
 
-class Wal;  // forward declaration; storage.cpp includes wal.h
+class Wal;          // forward declaration; storage.cpp includes wal.h
+class Replicator;   // forward declaration; storage.cpp includes replication.h
 
 class Storage {
 public:
@@ -65,6 +68,22 @@ public:
     // Pass nullptr (the default) for no logging — the state used during replay.
     void attach_wal(Wal* wal);
 
+    // Attach a Replicator (leader only) so future set/del (and evictions) are
+    // forwarded to followers. nullptr (the default) means "don't replicate".
+    void attach_replicator(Replicator* replicator);
+
+    // Take a consistent snapshot of all (key, value) pairs while holding the
+    // lock, running `while_locked` (if given) in the SAME critical section. The
+    // replicator uses this to atomically snapshot the data AND start streaming
+    // new writes, so a (re)syncing follower misses no write and sees no
+    // duplicate. Order is most-recently-used first.
+    std::vector<std::pair<std::string, std::string>> snapshot_locked(
+        const std::function<void()>& while_locked = {});
+
+    // Remove all keys (used by a follower when the leader starts a full sync).
+    // Does NOT touch the WAL — replicas should run without one.
+    void clear();
+
     // Toggle replay mode. While replaying a log, eviction is SUPPRESSED so only
     // the explicitly-logged DEL records remove keys (replay can't see the
     // original read-driven recency, so re-deriving evictions would pick the wrong
@@ -86,6 +105,7 @@ private:
     std::size_t capacity_ = 0;                       // 0 = unbounded
     bool replaying_ = false;                          // suppress eviction in replay
     Wal* wal_ = nullptr;                             // not owned; nullptr = no log
+    Replicator* replicator_ = nullptr;               // not owned; nullptr = no repl
 };
 
 }  // namespace redon

@@ -50,6 +50,7 @@ add_library(redon_core STATIC
   src/server.cpp
   src/thread_pool.cpp
   src/wal.cpp
+  src/replication.cpp
 )
 target_link_libraries(redon_core PUBLIC redon_net Threads::Threads)
 

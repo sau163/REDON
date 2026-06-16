@@ -100,6 +100,26 @@ inline void set_recv_timeout(socket_t sock, int seconds) {
 #endif
 }
 
+// Make send() on this socket give up after `seconds` instead of blocking
+// forever when the peer stops reading (a stalled follower). seconds <= 0 leaves
+// it blocking.
+inline void set_send_timeout(socket_t sock, int seconds) {
+    if (seconds <= 0) {
+        return;
+    }
+#if defined(_WIN32)
+    DWORD ms = static_cast<DWORD>(seconds) * 1000u;
+    ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+                 reinterpret_cast<const char*>(&ms), sizeof(ms));
+#else
+    struct timeval tv;
+    tv.tv_sec = seconds;
+    tv.tv_usec = 0;
+    ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+                 reinterpret_cast<const char*>(&tv), sizeof(tv));
+#endif
+}
+
 // Enable TCP keepalive (Redis enables this by default) so a peer that silently
 // vanishes — machine crash, cable pull — is eventually detected by the OS and
 // the connection torn down, instead of lingering forever.
