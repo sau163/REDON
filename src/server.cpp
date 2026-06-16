@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "command.h"
+#include "replication.h"
 #include "thread_pool.h"
 #include "wal.h"
 
@@ -24,6 +25,11 @@ namespace {
 // bytes with no newline, we refuse rather than buffer without bound (a basic
 // guard against a misbehaving or malicious peer).
 constexpr std::size_t kMaxLineLength = 64 * 1024;  // 64 KB
+
+// Idle timeout for the leader's replication link on a follower. It must exceed
+// the leader's heartbeat interval (2s); past this with no data the leader is
+// presumed dead and the link is dropped, freeing the worker.
+constexpr int kReplicaLinkTimeoutSeconds = 30;
 
 // send() takes an int length, so never hand it more than this in a single call.
 // Otherwise casting a >2 GB (len - sent) to int would overflow into a negative
@@ -76,17 +82,12 @@ struct ConnectionScope {
 
 }  // namespace
 
-Server::Server(std::string host, std::uint16_t port, std::size_t num_workers,
-               std::string wal_path, int idle_timeout_seconds,
-               std::size_t capacity)
-    : host_(std::move(host)),
-      port_(port),
-      num_workers_(num_workers),
-      idle_timeout_seconds_(idle_timeout_seconds),
-      wal_path_(std::move(wal_path)),
-      store_(capacity) {}
+Server::Server(ServerConfig config)
+    : config_(std::move(config)), store_(config_.capacity) {}
 
-// Defined here (where Wal is complete) so unique_ptr<Wal> can be destroyed.
+// Defined here (where Wal/Replicator are complete) so the unique_ptr members can
+// be destroyed. The Replicator stops and joins its threads in its destructor;
+// declaring it after store_ means it is destroyed first, while store_ is alive.
 Server::~Server() = default;
 
 void Server::log(const std::string& message) {
@@ -97,13 +98,14 @@ void Server::log(const std::string& message) {
 }
 
 bool Server::setup_persistence() {
+    const std::string& wal_path = config_.wal_path;
     // Persistence off?
-    if (wal_path_.empty() || wal_path_ == "none" || wal_path_ == "-") {
+    if (wal_path.empty() || wal_path == "none" || wal_path == "-") {
         std::cout << "Persistence: disabled (in-memory only)\n";
         return true;
     }
 
-    wal_ = std::make_unique<Wal>(wal_path_);
+    wal_ = std::make_unique<Wal>(wal_path);
 
     // 1. Rebuild state from any existing log BEFORE the WAL is attached, so the
     //    replayed set()/del() calls don't get re-logged.
@@ -111,7 +113,7 @@ bool Server::setup_persistence() {
 
     // 2. Open the log for appending new writes.
     if (!wal_->open_for_append()) {
-        std::cerr << "error: could not open WAL file '" << wal_path_
+        std::cerr << "error: could not open WAL file '" << wal_path
                   << "' for writing\n";
         return false;
     }
@@ -119,16 +121,36 @@ bool Server::setup_persistence() {
     // 3. Attach it so every future SET/DEL is recorded before it takes effect.
     store_.attach_wal(wal_.get());
 
-    std::cout << "Persistence: " << wal_path_ << " (replayed " << replayed
+    std::cout << "Persistence: " << wal_path << " (replayed " << replayed
               << " record" << (replayed == 1 ? "" : "s") << ")\n";
     return true;
 }
 
+void Server::setup_replication() {
+    if (config_.is_follower) {
+        std::cout << "Role: follower (read-only replica)\n";
+        return;
+    }
+    if (config_.follower_addrs.empty()) {
+        std::cout << "Role: leader (standalone, no followers)\n";
+        return;
+    }
+    // Leader with followers: start streaming writes to them.
+    replicator_ =
+        std::make_unique<Replicator>(config_.follower_addrs, &store_);
+    store_.attach_replicator(replicator_.get());
+    replicator_->start();
+    std::cout << "Role: leader, replicating to " << replicator_->follower_count()
+              << " follower(s)\n";
+}
+
 int Server::run() {
-    // 0. Load any persisted data and arm the WAL before accepting clients.
+    // 0. Load any persisted data, arm the WAL, and (leader) start replication
+    //    before accepting clients.
     if (!setup_persistence()) {
         return 1;
     }
+    setup_replication();
 
     // 1. Create the listening socket (IPv4, TCP).
     net::socket_t listen_sock = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -151,15 +173,15 @@ int Server::run() {
     sockaddr_in addr;
     std::memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(port_);
-    if (::inet_pton(AF_INET, host_.c_str(), &addr.sin_addr) != 1) {
-        std::cerr << "error: invalid host address '" << host_ << "'\n";
+    addr.sin_port = htons(config_.port);
+    if (::inet_pton(AF_INET, config_.host.c_str(), &addr.sin_addr) != 1) {
+        std::cerr << "error: invalid host address '" << config_.host << "'\n";
         return 1;
     }
     if (::bind(listen_sock, reinterpret_cast<sockaddr*>(&addr),
                sizeof(addr)) != 0) {
-        std::cerr << "error: could not bind " << host_ << ":" << port_ << ": "
-                  << net::last_error_str() << "\n";
+        std::cerr << "error: could not bind " << config_.host << ":"
+                  << config_.port << ": " << net::last_error_str() << "\n";
         return 1;
     }
 
@@ -170,10 +192,11 @@ int Server::run() {
         return 1;
     }
 
-    std::cout << "Redon server listening on " << host_ << ":" << port_ << "\n";
-    std::cout << "(thread pool of " << num_workers_ << " workers; ";
-    if (idle_timeout_seconds_ > 0) {
-        std::cout << "idle timeout " << idle_timeout_seconds_ << "s";
+    std::cout << "Redon server listening on " << config_.host << ":"
+              << config_.port << "\n";
+    std::cout << "(thread pool of " << config_.num_workers << " workers; ";
+    if (config_.idle_timeout_seconds > 0) {
+        std::cout << "idle timeout " << config_.idle_timeout_seconds << "s";
     } else {
         std::cout << "no idle timeout";
     }
@@ -189,7 +212,7 @@ int Server::run() {
 
     // Cap the queue so a connection flood can't pile up unbounded sockets faster
     // than the workers drain them. Past the cap we reject (and close) new clients.
-    std::size_t max_queued = num_workers_ * 16;
+    std::size_t max_queued = config_.num_workers * 16;
     if (max_queued < 256) {
         max_queued = 256;
     }
@@ -197,7 +220,7 @@ int Server::run() {
     try {
         // The pool lives for the whole accept loop; if run() returns, its
         // destructor drains the queue and joins the workers.
-        ThreadPool pool(num_workers_, max_queued);
+        ThreadPool pool(config_.num_workers, max_queued);
 
         // 4. Accept loop: take each client and HAND IT TO THE POOL, then go
         // straight back to accepting. A free worker serves the client to
@@ -213,7 +236,7 @@ int Server::run() {
             // disconnects a client that just sits there sending nothing, so it
             // can't hold a worker hostage.
             net::set_keepalive(client);
-            net::set_recv_timeout(client, idle_timeout_seconds_);
+            net::set_recv_timeout(client, config_.idle_timeout_seconds);
 
             // Owns the socket until we successfully hand it to the pool; closes
             // it if submission fails (overloaded) or throws.
@@ -260,6 +283,10 @@ int Server::run() {
 void Server::handle_client(net::socket_t client) {
     std::string inbuf;   // holds bytes received but not yet split into lines
     char chunk[4096];
+    // Set true once this connection sends the leader's replication handshake.
+    // After that it is the replicated write stream: writes are applied even on a
+    // follower, and we send no replies back (the leader doesn't read them).
+    bool is_replica_link = false;
 
     for (;;) {
         // If the unprocessed buffer already holds an over-long partial line,
@@ -294,10 +321,24 @@ void Server::handle_client(net::socket_t client) {
             std::string line = inbuf.substr(0, newline);
             inbuf.erase(0, newline + 1);
 
+            const bool was_replica_link = is_replica_link;
             bool should_close = false;
-            std::string reply = execute_line(line, store_, &should_close);
-            if (!send_line(client, reply)) {
-                return;  // connection broke while replying
+            std::string reply = execute_line(line, store_, &should_close,
+                                             config_.is_follower,
+                                             &is_replica_link);
+            if (!was_replica_link && is_replica_link) {
+                // This connection just became the leader's replication stream,
+                // not an ordinary client: use the longer replication timeout so a
+                // quiet period doesn't tear it down, but a truly dead leader (no
+                // heartbeat for kReplicaLinkTimeoutSeconds) is still detected.
+                net::set_recv_timeout(client, kReplicaLinkTimeoutSeconds);
+            }
+            // Reply to ordinary clients and to the handshake itself, but stay
+            // silent for the replicated stream that follows (was_replica_link).
+            if (!was_replica_link) {
+                if (!send_line(client, reply)) {
+                    return;  // connection broke while replying
+                }
             }
             if (should_close) {
                 return;  // client asked to QUIT

@@ -1,25 +1,27 @@
 // main.cpp — entry point for the `redon-server` executable.
 //
-// Usage:
-//   redon-server                                 # 127.0.0.1:6380, default workers
-//   redon-server <port>                          # 127.0.0.1:<port>
-//   redon-server <host> <port>                   # <host>:<port>
-//   redon-server <host> <port> <threads>                  # ...worker-pool size
-//   redon-server <host> <port> <threads> <wal>            # ...WAL path
-//   redon-server <host> <port> <threads> <wal> <idle>     # ...idle timeout
-//   redon-server <host> <port> <threads> <wal> <idle> <cap># ...LRU capacity
+// Positional args (each requires the earlier ones):
+//   redon-server [host] [port] [threads] [wal] [idle] [capacity]
+//   redon-server <port>                          # shorthand for a bare port
 //
-// The WAL (Write-Ahead Log) file defaults to "redon.wal" — data persists across
-// restarts. Pass "none" as the <wal> argument for an in-memory-only server.
-// <idle> is the seconds a client may sit idle before being disconnected
-// (default 300; 0 disables it), like Redis's `timeout` directive. <cap> is the
-// LRU capacity in keys (default 0 = unbounded), like Redis's `maxmemory`.
+// Replication flags (Phase 5):
+//   --replica                 run as a read-only follower (the leader connects in)
+//   --follower <host:port>    run as a leader and replicate to this follower
+//                             (repeat the flag for several followers)
+//
+// Defaults: WAL "redon.wal" (use "none" for in-memory), idle timeout 300s
+// (0 disables, like Redis `timeout`), capacity 0 = unbounded (like Redis
+// `maxmemory`). Examples:
+//   redon-server 127.0.0.1 6380 8 redon.wal 300 0 --follower 127.0.0.1:6381
+//   redon-server 127.0.0.1 6381 8 none --replica
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "net.h"
 #include "server.h"
@@ -101,57 +103,71 @@ bool parse_capacity(const std::string& text, std::size_t* out) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string host = kDefaultHost;
-    std::uint16_t port = kDefaultPort;
-    std::size_t workers = default_workers();
-    std::string wal_path = "redon.wal";  // persistence on by default
-    int idle_timeout = 300;              // seconds; 0 disables
-    std::size_t capacity = 0;            // LRU bound in keys; 0 = unbounded
+    redon::ServerConfig config;
+    config.host = kDefaultHost;
+    config.port = kDefaultPort;
+    config.num_workers = default_workers();
 
-    // Positional args: [host] [port] [threads] [wal]. A bare port is allowed as
-    // the single-arg form; later options require the earlier ones to be given.
-    if (argc >= 2) {
-        // For argc==2 the lone argument is the port; otherwise argv[1] is host.
-        if (argc == 2) {
-            if (!parse_port(argv[1], &port)) {
-                std::cerr << "error: invalid port '" << argv[1] << "'\n";
+    // Separate replication flags from the positional arguments.
+    std::vector<std::string> pos;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--replica") {
+            config.is_follower = true;
+        } else if (arg == "--follower") {
+            if (i + 1 >= argc) {
+                std::cerr << "error: --follower needs a host:port argument\n";
                 return 1;
             }
+            config.follower_addrs.push_back(argv[++i]);
+        } else if (arg.rfind("--", 0) == 0) {
+            std::cerr << "error: unknown option '" << arg << "'\n";
+            return 1;
         } else {
-            host = argv[1];
-            if (!parse_port(argv[2], &port)) {
-                std::cerr << "error: invalid port '" << argv[2] << "'\n";
-                return 1;
-            }
+            pos.push_back(arg);
         }
     }
-    if (argc >= 4) {
-        if (!parse_workers(argv[3], &workers)) {
-            std::cerr << "error: invalid thread count '" << argv[3]
-                      << "' (expected 1..4096)\n";
+
+    // Positional: [host] [port] [threads] [wal] [idle] [capacity]. A single
+    // positional is treated as the port (back-compat with the early phases).
+    if (pos.size() == 1) {
+        if (!parse_port(pos[0], &config.port)) {
+            std::cerr << "error: invalid port '" << pos[0] << "'\n";
+            return 1;
+        }
+    } else if (pos.size() >= 2) {
+        config.host = pos[0];
+        if (!parse_port(pos[1], &config.port)) {
+            std::cerr << "error: invalid port '" << pos[1] << "'\n";
             return 1;
         }
     }
-    if (argc >= 5) {
-        wal_path = argv[4];
+    if (pos.size() >= 3 && !parse_workers(pos[2], &config.num_workers)) {
+        std::cerr << "error: invalid thread count '" << pos[2]
+                  << "' (expected 1..4096)\n";
+        return 1;
     }
-    if (argc >= 6) {
-        if (!parse_timeout(argv[5], &idle_timeout)) {
-            std::cerr << "error: invalid idle timeout '" << argv[5]
-                      << "' (expected 0..86400 seconds)\n";
-            return 1;
-        }
+    if (pos.size() >= 4) {
+        config.wal_path = pos[3];
     }
-    if (argc >= 7) {
-        if (!parse_capacity(argv[6], &capacity)) {
-            std::cerr << "error: invalid capacity '" << argv[6]
-                      << "' (expected a non-negative integer)\n";
-            return 1;
-        }
+    if (pos.size() >= 5 &&
+        !parse_timeout(pos[4], &config.idle_timeout_seconds)) {
+        std::cerr << "error: invalid idle timeout '" << pos[4]
+                  << "' (expected 0..86400 seconds)\n";
+        return 1;
     }
-    if (argc > 7) {
+    if (pos.size() >= 6 && !parse_capacity(pos[5], &config.capacity)) {
+        std::cerr << "error: invalid capacity '" << pos[5]
+                  << "' (expected a non-negative integer)\n";
+        return 1;
+    }
+    if (pos.size() > 6) {
         std::cerr << "usage: redon-server [host] [port] [threads] [wal] [idle] "
-                     "[capacity]\n";
+                     "[capacity] [--replica] [--follower host:port ...]\n";
+        return 1;
+    }
+    if (config.is_follower && !config.follower_addrs.empty()) {
+        std::cerr << "error: a --replica cannot also have --follower targets\n";
         return 1;
     }
 
@@ -163,6 +179,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    redon::Server server(host, port, workers, wal_path, idle_timeout, capacity);
+    redon::Server server(std::move(config));
     return server.run();
 }

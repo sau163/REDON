@@ -1,10 +1,9 @@
 // server.h — the TCP server that ties networking + protocol + storage together.
 //
-// Phase 1 behavior: bind a port, then loop forever accepting ONE client at a
-// time. Each client is served fully (read commands, reply) until it disconnects
-// or sends QUIT, after which the server accepts the next client. Phase 2 will
-// hand each accepted client to a worker thread so many can be served at once;
-// the per-client logic in handle_client() is already isolated for that change.
+// It binds a port and runs an accept loop that hands each accepted client to a
+// thread pool (Phase 2), so many clients are served at once. Each client is
+// served until it disconnects or sends QUIT. Phase 5 adds roles: a node is a
+// leader (serves writes and replicates them) or a read-only follower.
 #ifndef REDON_SERVER_H
 #define REDON_SERVER_H
 
@@ -14,56 +13,59 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "net.h"
 #include "storage.h"
 
 namespace redon {
 
-class Wal;  // forward declaration; server.cpp includes wal.h
+class Wal;          // forward declaration; server.cpp includes wal.h
+class Replicator;   // forward declaration; server.cpp includes replication.h
+
+// All the knobs for one server node, bundled so the constructor isn't a dozen
+// positional arguments.
+struct ServerConfig {
+    std::string host = "127.0.0.1";
+    std::uint16_t port = 6380;
+    std::size_t num_workers = 8;
+    std::string wal_path = "redon.wal";       // "" / "none" / "-" => no persistence
+    int idle_timeout_seconds = 300;           // 0 => no idle timeout
+    std::size_t capacity = 0;                 // LRU bound; 0 => unbounded
+    bool is_follower = false;                 // read-only replica?
+    std::vector<std::string> follower_addrs;  // leader: "host:port" of each follower
+};
 
 class Server {
 public:
-    // `num_workers` is the size of the thread pool — the number of clients that
-    // can be actively served at the same time. `wal_path` is the Write-Ahead Log
-    // file for persistence; pass an empty string (or "none"/"-") to run purely
-    // in memory with no durability. `idle_timeout_seconds` disconnects a client
-    // that sends nothing for that long (0 disables it), so a stalled connection
-    // can't hold a worker forever. `capacity` is the LRU bound — the cache holds
-    // at most that many keys (0 = unbounded).
-    Server(std::string host, std::uint16_t port, std::size_t num_workers,
-           std::string wal_path, int idle_timeout_seconds, std::size_t capacity);
+    explicit Server(ServerConfig config);
 
-    // Declared (not defaulted inline) so the std::unique_ptr<Wal> member can be
-    // destroyed in server.cpp, where Wal is a complete type.
+    // Declared out-of-line so the unique_ptr<Wal>/<Replicator> members can be
+    // destroyed in server.cpp, where those types are complete.
     ~Server();
 
-    // Set up the listening socket and run the accept loop. Blocks indefinitely.
-    // Returns a non-zero exit code if the socket could not be set up; otherwise
-    // it does not return under normal operation (stop with Ctrl+C).
+    // Set up persistence + replication, then run the accept loop. Blocks
+    // indefinitely; returns non-zero only if startup failed (stop with Ctrl+C).
     int run();
 
 private:
-    // Serve a single connected client until it disconnects or sends QUIT. Runs
-    // on a worker thread, so it touches only its own socket plus the shared
-    // (internally locked) Storage.
+    // Serve a single connected client until it disconnects or sends QUIT. Runs on
+    // a worker thread, touching only its own socket plus the shared Storage.
     void handle_client(net::socket_t client);
 
-    // Print one line to stdout atomically. Worker threads log concurrently, so
-    // without this their output would interleave mid-line.
+    // Print one line to stdout atomically (worker threads log concurrently).
     void log(const std::string& message);
 
-    // Replay the WAL into store_ and attach it for future writes. Returns false
-    // only on a fatal error (e.g. the log file can't be opened for appending).
+    // Replay the WAL into store_ and attach it. Returns false on a fatal error.
     bool setup_persistence();
 
-    std::string host_;
-    std::uint16_t port_;
-    std::size_t num_workers_;
-    int idle_timeout_seconds_;        // 0 => no idle timeout
-    std::string wal_path_;            // empty / "none" / "-" => persistence off
-    std::unique_ptr<Wal> wal_;        // owns the log; attached to store_
-    Storage store_;  // the one shared database for every client (thread-safe)
+    // Leader only: if followers are configured, start streaming writes to them.
+    void setup_replication();
+
+    ServerConfig config_;
+    std::unique_ptr<Wal> wal_;          // owns the log; attached to store_
+    Storage store_;                     // the one shared database (thread-safe)
+    std::unique_ptr<Replicator> replicator_;  // leader: streams to followers
 
     std::mutex log_mutex_;                 // serializes log() output
     std::atomic<int> active_clients_{0};   // currently-connected client count
