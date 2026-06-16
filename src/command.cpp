@@ -76,7 +76,8 @@ std::string wrong_args(const std::string& verb_lower) {
 }  // namespace
 
 std::string execute_line(const std::string& line, Storage& store,
-                         bool* should_close) {
+                         bool* should_close, bool node_is_follower,
+                         bool* is_replica_link) {
     *should_close = false;
 
     const std::string s = trim(line);
@@ -91,6 +92,24 @@ std::string execute_line(const std::string& line, Storage& store,
     const std::string verb = to_upper(next_token(s, &pos));
     const std::string key = next_token(s, &pos);
     const std::string rest = s.substr(pos);  // everything after the key
+
+    // Replication handshake: the leader marks this connection as the replica
+    // link, then a follower resets its data to receive a fresh full sync.
+    if (verb == "__REPLSYNC__") {
+        if (is_replica_link != nullptr) {
+            *is_replica_link = true;
+        }
+        store.clear();
+        return "OK";
+    }
+
+    // A follower is read-only to ordinary clients: only writes arriving on the
+    // replication link (from the leader) are applied.
+    const bool replica_link = (is_replica_link != nullptr && *is_replica_link);
+    if (node_is_follower && !replica_link &&
+        (verb == "SET" || verb == "DEL" || verb == "DELETE")) {
+        return "ERR READONLY this node is a read-only replica";
+    }
 
     if (verb == "SET") {
         // Needs a key and a non-empty value.

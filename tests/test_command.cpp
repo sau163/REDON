@@ -104,7 +104,43 @@ void test_argument_and_unknown_errors() {
     CHECK_EQ(run(s, ""), std::string(""));  // blank line -> empty reply
 }
 
+// Phase 5: a follower is read-only to clients, but the replication handshake
+// turns a connection into the write stream (and resets the store for a full
+// sync), after which writes on that link are applied.
+void test_follower_read_only_and_replica_link() {
+    Storage s;
+    bool closed = false;
+    bool replica = false;
+
+    // On a follower, client writes are rejected; reads are allowed.
+    CHECK_EQ(execute_line("SET k v", s, &closed, true, &replica),
+             std::string("ERR READONLY this node is a read-only replica"));
+    CHECK_EQ(execute_line("DEL k", s, &closed, true, &replica),
+             std::string("ERR READONLY this node is a read-only replica"));
+    CHECK_EQ(execute_line("GET k", s, &closed, true, &replica),
+             std::string("(nil)"));
+
+    // The replication handshake flags the link and clears the store for a sync.
+    s.set("old", "data");
+    CHECK_EQ(execute_line("__REPLSYNC__", s, &closed, true, &replica),
+             std::string("OK"));
+    CHECK(replica);
+    CHECK(!s.exists("old"));
+
+    // Writes ON THE LINK now apply even though the node is a follower.
+    CHECK_EQ(execute_line("SET k v", s, &closed, true, &replica),
+             std::string("OK"));
+    CHECK(s.exists("k"));
+
+    // A leader (node_is_follower=false) always accepts client writes.
+    Storage leader;
+    bool not_replica = false;
+    CHECK_EQ(execute_line("SET a 1", leader, &closed, false, &not_replica),
+             std::string("OK"));
+}
+
 int main() {
+    RUN(test_follower_read_only_and_replica_link);
     RUN(test_basic_flow);
     RUN(test_value_may_contain_spaces);
     RUN(test_verbs_case_insensitive_and_synonyms);

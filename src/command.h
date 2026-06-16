@@ -19,8 +19,16 @@ namespace redon {
 //
 // `*should_close` is set to true when the command asks to end the connection
 // (QUIT/EXIT). Callers pass the address of a bool they own; it is always written.
+//
+// Replication parameters (Phase 5):
+//   `node_is_follower` — true on a follower node, which is read-only to ordinary
+//       clients (SET/DEL are rejected) unless they arrive on the replication link.
+//   `is_replica_link` — per-connection flag (owned by the caller). The leader's
+//       replication handshake (__REPLSYNC__) sets it true, after which writes on
+//       that connection are accepted as the replicated stream.
 std::string execute_line(const std::string& line, Storage& store,
-                         bool* should_close);
+                         bool* should_close, bool node_is_follower = false,
+                         bool* is_replica_link = nullptr);
 
 }  // namespace redon
 
