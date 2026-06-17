@@ -67,7 +67,9 @@ bool send_all(net::socket_t sock, const std::string& data) {
     return true;
 }
 
-// Read one '\n'-terminated line (used only for the small handshake reply).
+// Read one '\n'-terminated line (used only for the small handshake reply). Fails
+// fast if the line runs past 4 KB with no newline — a non-Redon peer that never
+// sends one shouldn't be able to tie the sender up until the recv timeout.
 bool recv_line(net::socket_t sock, std::string* line) {
     line->clear();
     char c;
@@ -79,8 +81,9 @@ bool recv_line(net::socket_t sock, std::string* line) {
         if (c == '\n') {
             return true;
         }
-        if (line->size() < 4096) {
-            line->push_back(c);
+        line->push_back(c);
+        if (line->size() > 4096) {
+            return false;  // malformed / not a Redon server
         }
     }
 }
@@ -168,17 +171,22 @@ void Replicator::sender_loop(Link* link) {
             }
         }
 
-        net::socket_t sock = connect_to(link->host, link->port);
-        bool connected = (sock != net::kInvalidSocket);
+        // RAII: the socket is closed on every exit from this iteration —
+        // including an exception out of snapshot_locked — and reopened next loop.
+        net::SocketCloser sock_guard(connect_to(link->host, link->port));
+        net::socket_t sock = sock_guard.get();
 
-        if (connected) {
+        if (sock != net::kInvalidSocket) {
             net::set_keepalive(sock);
             net::set_send_timeout(sock, kIoTimeoutSeconds);
             net::set_recv_timeout(sock, kIoTimeoutSeconds);
 
-            // Handshake: tell the follower to reset and become our replica link.
+            // Handshake: ask the follower to reset and become our replica link.
+            // Proceed only if it replies "OK" — if we accidentally point at a
+            // non-follower it rejects us, so we never stream into the wrong node.
             std::string ack;
-            if (send_all(sock, "__REPLSYNC__\n") && recv_line(sock, &ack)) {
+            if (send_all(sock, "__REPLSYNC__\n") && recv_line(sock, &ack) &&
+                ack == "OK") {
                 std::cerr << "[repl] synced with follower " << link->host << ":"
                           << link->port << "\n";
 
@@ -203,7 +211,8 @@ void Replicator::sender_loop(Link* link) {
                 // Stream live writes until disconnect / resync / shutdown. When
                 // idle, send a PING heartbeat so the link stays alive AND a dead
                 // follower is detected promptly (the send fails) instead of only
-                // when the next real write happens to arrive.
+                // when the next real write happens to arrive. On stop we just
+                // break so the common cleanup below always runs.
                 while (ok) {
                     std::string line;
                     bool have_line = false;
@@ -214,37 +223,36 @@ void Replicator::sender_loop(Link* link) {
                                 return link->stop || link->resync_needed ||
                                        !link->queue.empty();
                             });
-                        if (link->stop) {
-                            net::close_socket(sock);
-                            return;
-                        }
-                        if (link->resync_needed) {
+                        if (link->stop || link->resync_needed) {
                             link->resync_needed = false;
-                            ok = false;  // reconnect & full-sync again
-                            break;
-                        }
-                        if (!link->queue.empty()) {
+                            ok = false;  // stop, or reconnect & full-sync again
+                        } else if (!link->queue.empty()) {
                             line = std::move(link->queue.front());
                             link->queue.pop_front();
                             have_line = true;
                         }
+                    }
+                    if (!ok) {
+                        break;
                     }
                     if (!send_all(sock, have_line ? line : std::string("PING\n"))) {
                         ok = false;
                     }
                 }
             }
-            net::close_socket(sock);
         }
 
-        // Stop streaming and drop any backlog; the next connect does a full sync.
+        // Common cleanup, reached on every path: always clear the streaming flag
+        // and backlog so no write is enqueued to a link with no live sender.
+        bool stopping = false;
         {
             std::lock_guard<std::mutex> lk(link->mutex);
             link->streaming = false;
             link->queue.clear();
-            if (link->stop) {
-                return;
-            }
+            stopping = link->stop;
+        }
+        if (stopping) {
+            return;  // sock_guard closes the socket on the way out
         }
 
         // Wait before reconnecting (interruptible on stop).

@@ -132,11 +132,22 @@ void test_follower_read_only_and_replica_link() {
              std::string("OK"));
     CHECK(s.exists("k"));
 
-    // A leader (node_is_follower=false) always accepts client writes.
+    // A second handshake on the same link is rejected (no re-clear mid-sync).
+    CHECK_EQ(
+        execute_line("__REPLSYNC__", s, &closed, true, &replica),
+        std::string("ERR replication sync already in progress on this connection"));
+    CHECK(s.exists("k"));  // store was NOT cleared again
+
+    // A leader (node_is_follower=false) always accepts client writes, and must
+    // REJECT __REPLSYNC__ so a stray client can't wipe its authoritative data.
     Storage leader;
     bool not_replica = false;
     CHECK_EQ(execute_line("SET a 1", leader, &closed, false, &not_replica),
              std::string("OK"));
+    CHECK_EQ(execute_line("__REPLSYNC__", leader, &closed, false, &not_replica),
+             std::string("ERR __REPLSYNC__ is only valid on a read-only replica"));
+    CHECK(!not_replica);
+    CHECK(leader.exists("a"));  // leader data survived the rejected handshake
 }
 
 int main() {

@@ -93,9 +93,20 @@ std::string execute_line(const std::string& line, Storage& store,
     const std::string key = next_token(s, &pos);
     const std::string rest = s.substr(pos);  // everything after the key
 
-    // Replication handshake: the leader marks this connection as the replica
-    // link, then a follower resets its data to receive a fresh full sync.
+    // Replication handshake: mark this connection as the leader's replica link
+    // and reset the follower's data for a fresh full sync. Guarded so an
+    // ordinary client can't use it to wipe data:
+    //   * only a follower accepts it (a leader's authoritative data is never
+    //     cleared by a stray client sending __REPLSYNC__),
+    //   * only once per connection (a replayed handshake can't clear a sync that
+    //     is already in progress).
     if (verb == "__REPLSYNC__") {
+        if (!node_is_follower) {
+            return "ERR __REPLSYNC__ is only valid on a read-only replica";
+        }
+        if (is_replica_link != nullptr && *is_replica_link) {
+            return "ERR replication sync already in progress on this connection";
+        }
         if (is_replica_link != nullptr) {
             *is_replica_link = true;
         }
