@@ -148,6 +148,17 @@ by mirroring the leader, which controls exactly what exists.)
 - ⚠️ **Followers should be in-memory** (`wal none`) and unbounded — they are
   replicas reset by the leader on each sync; a follower with its own WAL/capacity
   could diverge.
+- ⚠️ **A narrow clear-then-sync window.** A follower clears its data the moment
+  it accepts `__REPLSYNC__`, then receives the snapshot. If the leader crashes in
+  the ~1-round-trip gap *between* those, the follower is left empty until a leader
+  comes back to re-sync it. We keep the immediate clear because it guarantees the
+  follower ends up *exactly* matching the leader (including an empty leader);
+  buffering the whole snapshot to swap it in atomically would be the way to close
+  the gap, at a memory cost.
+- ⚠️ **Shutdown can lag a few seconds.** If a follower is stalled when the leader
+  shuts down, a `send()` already in flight blocks until its 5 s timeout before the
+  sender thread notices the stop. Harmless (the process normally just exits), but
+  a fully responsive shutdown would need an interruptible send.
 
 ## Try it
 
