@@ -19,17 +19,18 @@ phase — it is always a working program, just with more capabilities each time.
 | **2** ✅ | Thread pool | Serving thousands of clients at once |
 | **3** ✅ | Write-Ahead Log (WAL) | Surviving a crash without losing data |
 | **4** ✅ | LRU eviction | Staying within a memory budget |
-| 5 | Replication | Surviving a whole machine dying |
+| **5** ✅ | Replication | Surviving a whole machine dying |
 | 6 | Raft leader election | Agreeing who is in charge (consensus) |
 | 7 | Sharding | Storing more data than one machine holds |
 | 8 | RocksDB backend | Millions of keys, fast restart |
 | 9 | Metrics dashboard | Seeing what the system is doing |
 
-> **You are here: Phase 4 is complete.** The server serves many clients
-> concurrently, persists data so it survives a crash, *and* can bound its memory
-> with an LRU cache. See [docs/PHASE1.md](docs/PHASE1.md),
-> [docs/PHASE2.md](docs/PHASE2.md), [docs/PHASE3.md](docs/PHASE3.md), and
-> [docs/PHASE4.md](docs/PHASE4.md) for line-by-line explanations.
+> **You are here: Phase 5 is complete.** The server serves many clients
+> concurrently, persists data so it survives a crash, bounds its memory with an
+> LRU cache, *and* replicates writes to follower nodes so the data survives a
+> whole machine dying. See the per-phase explainers:
+> [1](docs/PHASE1.md) · [2](docs/PHASE2.md) · [3](docs/PHASE3.md) ·
+> [4](docs/PHASE4.md) · [5](docs/PHASE5.md).
 
 ---
 
@@ -125,6 +126,22 @@ The 6th argument is the **LRU capacity** in keys (default `0` = unbounded, like
 Redis's `maxmemory`): past it, the least-recently-used key is evicted. See
 [docs/PHASE4.md](docs/PHASE4.md).
 
+## Replication (survives a machine dying)
+
+A **leader** streams every write to one or more read-only **followers** (Phase 5):
+
+```sh
+# start followers (read-only, in-memory), then a leader that replicates to them
+redon-server 127.0.0.1 6381 8 none 0 0 --replica
+redon-server 127.0.0.1 6380 8 redon.wal 300 0 --follower 127.0.0.1:6381
+```
+
+`SET` on the leader appears on the followers within milliseconds; `SET` on a
+follower is rejected (`ERR READONLY`). Replication is asynchronous (low latency,
+small loss window on a leader crash) and a (re)connecting follower is brought up
+to date with a full snapshot sync. Automatic failover is **Phase 6 (Raft)**. See
+[docs/PHASE5.md](docs/PHASE5.md).
+
 The worker-thread count is how many clients are served **at the same time**
 (defaults to your CPU's thread count). See [docs/PHASE2.md](docs/PHASE2.md).
 
@@ -167,6 +184,7 @@ Redon/
 │   ├── command.h/.cpp    # parse a line of text into a command and run it
 │   ├── thread_pool.h/.cpp# worker pool: queue + mutex + condition_variable (Phase 2)
 │   ├── wal.h/.cpp        # Write-Ahead Log: append + replay for durability (Phase 3)
+│   ├── replication.h/.cpp# leader-side replication to follower nodes (Phase 5)
 │   ├── server.h/.cpp     # TCP server: accept clients, hand each to the pool
 │   ├── main.cpp          # entry point for redon-server
 │   └── client_main.cpp   # entry point for redon-cli
@@ -181,6 +199,7 @@ Redon/
 │   ├── PHASE1.md         # how Phase 1 works, explained
 │   ├── PHASE2.md         # how Phase 2 (concurrency) works, explained
 │   ├── PHASE3.md         # how Phase 3 (persistence) works, explained
-│   └── PHASE4.md         # how Phase 4 (LRU eviction) works, explained
+│   ├── PHASE4.md         # how Phase 4 (LRU eviction) works, explained
+│   └── PHASE5.md         # how Phase 5 (replication) works, explained
 └── CMakeLists.txt        # build configuration
 ```
