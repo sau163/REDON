@@ -51,6 +51,7 @@ add_library(redon_core STATIC
   src/thread_pool.cpp
   src/wal.cpp
   src/replication.cpp
+  src/raft.cpp
 )
 target_link_libraries(redon_core PUBLIC redon_net Threads::Threads)
 
@@ -88,3 +89,8 @@ add_executable(test_wal tests/test_wal.cpp)
 target_link_libraries(test_wal PRIVATE redon_core)
 target_include_directories(test_wal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 add_test(NAME wal COMMAND test_wal)
+
+add_executable(test_raft tests/test_raft.cpp)
+target_link_libraries(test_raft PRIVATE redon_core)
+target_include_directories(test_raft PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+add_test(NAME raft COMMAND test_raft)

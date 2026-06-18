@@ -14,6 +14,7 @@
 #ifndef REDON_NET_H
 #define REDON_NET_H
 
+#include <cstdint>
 #include <string>
 
 #if defined(_WIN32)
@@ -79,6 +80,24 @@ inline std::string last_error_str() {
 #endif
 }
 
+// Open a blocking TCP connection to host:port. Returns kInvalidSocket on
+// failure (including a peer that isn't listening — connect fails fast then).
+inline socket_t connect_tcp(const std::string& host, std::uint16_t port) {
+    socket_t sock = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == kInvalidSocket) {
+        return kInvalidSocket;
+    }
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1 ||
+        ::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        close_socket(sock);
+        return kInvalidSocket;
+    }
+    return sock;
+}
+
 // Make recv() on this socket give up after `seconds` of silence instead of
 // blocking forever. This is how we reap idle/slow clients (Redis's `timeout`
 // directive) so a stalled connection can't tie up a worker thread for good.
@@ -115,6 +134,29 @@ inline void set_send_timeout(socket_t sock, int seconds) {
     struct timeval tv;
     tv.tv_sec = seconds;
     tv.tv_usec = 0;
+    ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+                 reinterpret_cast<const char*>(&tv), sizeof(tv));
+#endif
+}
+
+// Set BOTH the send and receive timeouts on a socket, in milliseconds — used
+// for the short, frequent Raft RPCs which need sub-second deadlines.
+inline void set_io_timeout_ms(socket_t sock, int ms) {
+    if (ms <= 0) {
+        return;
+    }
+#if defined(_WIN32)
+    DWORD t = static_cast<DWORD>(ms);
+    ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char*>(&t), sizeof(t));
+    ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+                 reinterpret_cast<const char*>(&t), sizeof(t));
+#else
+    struct timeval tv;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char*>(&tv), sizeof(tv));
     ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
                  reinterpret_cast<const char*>(&tv), sizeof(tv));
 #endif
