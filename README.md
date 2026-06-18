@@ -20,17 +20,17 @@ phase — it is always a working program, just with more capabilities each time.
 | **3** ✅ | Write-Ahead Log (WAL) | Surviving a crash without losing data |
 | **4** ✅ | LRU eviction | Staying within a memory budget |
 | **5** ✅ | Replication | Surviving a whole machine dying |
-| 6 | Raft leader election | Agreeing who is in charge (consensus) |
+| **6** ✅ | Raft leader election | Agreeing who is in charge (consensus) |
 | 7 | Sharding | Storing more data than one machine holds |
 | 8 | RocksDB backend | Millions of keys, fast restart |
 | 9 | Metrics dashboard | Seeing what the system is doing |
 
-> **You are here: Phase 5 is complete.** The server serves many clients
+> **You are here: Phase 6 is complete.** The server serves many clients
 > concurrently, persists data so it survives a crash, bounds its memory with an
-> LRU cache, *and* replicates writes to follower nodes so the data survives a
-> whole machine dying. See the per-phase explainers:
-> [1](docs/PHASE1.md) · [2](docs/PHASE2.md) · [3](docs/PHASE3.md) ·
-> [4](docs/PHASE4.md) · [5](docs/PHASE5.md).
+> LRU cache, replicates writes to follower nodes, *and* a Raft cluster elects its
+> own leader — and automatically re-elects when the leader dies. See the per-phase
+> explainers: [1](docs/PHASE1.md) · [2](docs/PHASE2.md) · [3](docs/PHASE3.md) ·
+> [4](docs/PHASE4.md) · [5](docs/PHASE5.md) · [6](docs/PHASE6.md).
 
 ---
 
@@ -139,8 +139,25 @@ redon-server 127.0.0.1 6380 8 redon.wal 300 0 --follower 127.0.0.1:6381
 `SET` on the leader appears on the followers within milliseconds; `SET` on a
 follower is rejected (`ERR READONLY`). Replication is asynchronous (low latency,
 small loss window on a leader crash) and a (re)connecting follower is brought up
-to date with a full snapshot sync. Automatic failover is **Phase 6 (Raft)**. See
-[docs/PHASE5.md](docs/PHASE5.md).
+to date with a full snapshot sync. See [docs/PHASE5.md](docs/PHASE5.md).
+
+## Raft leader election (automatic failover)
+
+A cluster of nodes **elects its own leader** and re-elects automatically when the
+leader dies — the leader-election half of the Raft consensus algorithm (Phase 6):
+
+```sh
+# three nodes, each listing the OTHER two as --raft peers
+redon-server 127.0.0.1 6510 4 none 0 0 --raft 127.0.0.1:6511 --raft 127.0.0.1:6512
+redon-server 127.0.0.1 6511 4 none 0 0 --raft 127.0.0.1:6510 --raft 127.0.0.1:6512
+redon-server 127.0.0.1 6512 4 none 0 0 --raft 127.0.0.1:6510 --raft 127.0.0.1:6511
+```
+
+`ROLE` reports each node's `role`/`term`/`leader`; only the elected leader accepts
+writes (others reply `ERR NOTLEADER <addr>`). **Kill the leader** and within ~1s
+the survivors elect a new one. This phase implements leader election (consensus on
+*who* leads); carrying the data through Raft's log is the documented next step. See
+[docs/PHASE6.md](docs/PHASE6.md).
 
 The worker-thread count is how many clients are served **at the same time**
 (defaults to your CPU's thread count). See [docs/PHASE2.md](docs/PHASE2.md).
