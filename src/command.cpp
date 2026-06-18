@@ -13,7 +13,10 @@
 #include "command.h"
 
 #include <cctype>
+#include <stdexcept>
 #include <string>
+
+#include "raft.h"
 
 namespace redon {
 namespace {
@@ -77,7 +80,7 @@ std::string wrong_args(const std::string& verb_lower) {
 
 std::string execute_line(const std::string& line, Storage& store,
                          bool* should_close, bool node_is_follower,
-                         bool* is_replica_link) {
+                         bool* is_replica_link, RaftNode* raft) {
     *should_close = false;
 
     const std::string s = trim(line);
@@ -114,12 +117,42 @@ std::string execute_line(const std::string& line, Storage& store,
         return "OK";
     }
 
+    // Raft inter-node RPCs (Phase 6). These travel over the same line protocol
+    // between cluster nodes; dispatch them to the local Raft state machine.
+    if (verb == "__RAFT_VOTE__" || verb == "__RAFT_APPEND__") {
+        if (raft == nullptr) {
+            return "ERR this node is not part of a Raft cluster";
+        }
+        long term = 0;
+        try {
+            term = std::stol(key);
+        } catch (const std::exception&) {
+            return "ERR malformed Raft RPC";
+        }
+        return verb == "__RAFT_VOTE__" ? raft->handle_request_vote(term, rest)
+                                       : raft->handle_append_entries(term, rest);
+    }
+    // Report this node's Raft role/term/leader (handy for demos and clients).
+    if (verb == "ROLE") {
+        return raft != nullptr ? raft->status_line()
+                               : std::string("standalone (not a Raft cluster)");
+    }
+
     // A follower is read-only to ordinary clients: only writes arriving on the
     // replication link (from the leader) are applied.
     const bool replica_link = (is_replica_link != nullptr && *is_replica_link);
     if (node_is_follower && !replica_link &&
         (verb == "SET" || verb == "DEL" || verb == "DELETE")) {
         return "ERR READONLY this node is a read-only replica";
+    }
+
+    // In a Raft cluster only the elected leader accepts writes; point clients at
+    // the current leader otherwise.
+    if (raft != nullptr && !raft->is_leader() &&
+        (verb == "SET" || verb == "DEL" || verb == "DELETE")) {
+        const std::string leader = raft->leader_id();
+        return "ERR NOTLEADER " + (leader.empty() ? std::string("(unknown)")
+                                                  : leader);
     }
 
     if (verb == "SET") {

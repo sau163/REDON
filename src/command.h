@@ -13,6 +13,8 @@
 
 namespace redon {
 
+class RaftNode;  // forward declaration; command.cpp includes raft.h
+
 // Parse one line of input, run it against `store`, and return the reply text to
 // send back to the client. The returned string does NOT include a trailing
 // newline — the caller (server) adds the line terminator when it sends.
@@ -26,9 +28,14 @@ namespace redon {
 //   `is_replica_link` — per-connection flag (owned by the caller). The leader's
 //       replication handshake (__REPLSYNC__) sets it true, after which writes on
 //       that connection are accepted as the replicated stream.
+// Raft parameter (Phase 6):
+//   `raft` — if non-null, this node is in a Raft cluster: inter-node RPCs are
+//       dispatched to it, the ROLE command reports its status, and client writes
+//       are accepted only when this node is the elected leader.
 std::string execute_line(const std::string& line, Storage& store,
                          bool* should_close, bool node_is_follower = false,
-                         bool* is_replica_link = nullptr);
+                         bool* is_replica_link = nullptr,
+                         RaftNode* raft = nullptr);
 
 }  // namespace redon
 

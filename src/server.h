@@ -22,6 +22,7 @@ namespace redon {
 
 class Wal;          // forward declaration; server.cpp includes wal.h
 class Replicator;   // forward declaration; server.cpp includes replication.h
+class RaftNode;     // forward declaration; server.cpp includes raft.h
 
 // All the knobs for one server node, bundled so the constructor isn't a dozen
 // positional arguments.
@@ -34,6 +35,7 @@ struct ServerConfig {
     std::size_t capacity = 0;                 // LRU bound; 0 => unbounded
     bool is_follower = false;                 // read-only replica?
     std::vector<std::string> follower_addrs;  // leader: "host:port" of each follower
+    std::vector<std::string> raft_peers;      // Raft cluster: the OTHER nodes
 };
 
 class Server {
@@ -62,10 +64,14 @@ private:
     // Leader only: if followers are configured, start streaming writes to them.
     void setup_replication();
 
+    // Raft mode: if peers are configured, start the leader-election state machine.
+    void setup_raft();
+
     ServerConfig config_;
     std::unique_ptr<Wal> wal_;          // owns the log; attached to store_
     Storage store_;                     // the one shared database (thread-safe)
     std::unique_ptr<Replicator> replicator_;  // leader: streams to followers
+    std::unique_ptr<RaftNode> raft_;          // Raft cluster: leader election
 
     std::mutex log_mutex_;                 // serializes log() output
     std::atomic<int> active_clients_{0};   // currently-connected client count

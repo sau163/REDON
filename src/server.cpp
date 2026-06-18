@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "command.h"
+#include "raft.h"
 #include "replication.h"
 #include "thread_pool.h"
 #include "wal.h"
@@ -144,6 +145,20 @@ void Server::setup_replication() {
               << " follower(s)\n";
 }
 
+void Server::setup_raft() {
+    if (config_.raft_peers.empty()) {
+        return;  // not a Raft cluster
+    }
+    RaftNode::Config rc;
+    rc.self_id = config_.host + ":" + std::to_string(config_.port);
+    rc.peers = config_.raft_peers;
+    raft_ = std::make_unique<RaftNode>(std::move(rc));
+    raft_->start();
+    std::cout << "Raft: cluster member " << config_.host << ":" << config_.port
+              << " with " << config_.raft_peers.size()
+              << " peer(s); electing a leader...\n";
+}
+
 int Server::run() {
     // 0. Load any persisted data, arm the WAL, and (leader) start replication
     //    before accepting clients.
@@ -151,6 +166,7 @@ int Server::run() {
         return 1;
     }
     setup_replication();
+    setup_raft();
 
     // 1. Create the listening socket (IPv4, TCP).
     net::socket_t listen_sock = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -325,7 +341,7 @@ void Server::handle_client(net::socket_t client) {
             bool should_close = false;
             std::string reply = execute_line(line, store_, &should_close,
                                              config_.is_follower,
-                                             &is_replica_link);
+                                             &is_replica_link, raft_.get());
             if (!was_replica_link && is_replica_link) {
                 // This connection just became the leader's replication stream,
                 // not an ordinary client: use the longer replication timeout so a
