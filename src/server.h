@@ -23,6 +23,7 @@ namespace redon {
 class Wal;          // forward declaration; server.cpp includes wal.h
 class Replicator;   // forward declaration; server.cpp includes replication.h
 class RaftNode;     // forward declaration; server.cpp includes raft.h
+class Router;       // forward declaration; server.cpp includes router.h
 
 // All the knobs for one server node, bundled so the constructor isn't a dozen
 // positional arguments.
@@ -36,6 +37,7 @@ struct ServerConfig {
     bool is_follower = false;                 // read-only replica?
     std::vector<std::string> follower_addrs;  // leader: "host:port" of each follower
     std::vector<std::string> raft_peers;      // Raft cluster: the OTHER nodes
+    std::vector<std::string> shard_addrs;     // router: "host:port" of each shard
 };
 
 class Server {
@@ -55,6 +57,10 @@ private:
     // a worker thread, touching only its own socket plus the shared Storage.
     void handle_client(net::socket_t client);
 
+    // Router mode: forward one client command to the shard that owns its key and
+    // return the shard's reply. Sets *should_close for QUIT/EXIT.
+    std::string route_line(const std::string& line, bool* should_close);
+
     // Print one line to stdout atomically (worker threads log concurrently).
     void log(const std::string& message);
 
@@ -67,11 +73,15 @@ private:
     // Raft mode: if peers are configured, start the leader-election state machine.
     void setup_raft();
 
+    // Router mode: if shards are configured, build the key router.
+    void setup_sharding();
+
     ServerConfig config_;
     std::unique_ptr<Wal> wal_;          // owns the log; attached to store_
     Storage store_;                     // the one shared database (thread-safe)
     std::unique_ptr<Replicator> replicator_;  // leader: streams to followers
     std::unique_ptr<RaftNode> raft_;          // Raft cluster: leader election
+    std::unique_ptr<Router> router_;          // router: forwards to shards
 
     std::mutex log_mutex_;                 // serializes log() output
     std::atomic<int> active_clients_{0};   // currently-connected client count

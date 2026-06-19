@@ -12,6 +12,10 @@
 //   --raft <host:port>        join a Raft cluster; list the OTHER nodes' addresses
 //                             (repeat the flag). The cluster elects a leader; only
 //                             the leader accepts writes. Try the ROLE command.
+// Sharding flag (Phase 7) — run as a router instead of a data node:
+//   --shard <host:port>       forward each command to the shard owning its key
+//                             (hash(key) %% N over the listed shards). Repeat the
+//                             flag once per shard. The shards are plain servers.
 //
 // Defaults: WAL "redon.wal" (use "none" for in-memory), idle timeout 300s
 // (0 disables, like Redis `timeout`), capacity 0 = unbounded (like Redis
@@ -130,6 +134,12 @@ int main(int argc, char** argv) {
                 return 1;
             }
             config.raft_peers.push_back(argv[++i]);
+        } else if (arg == "--shard") {
+            if (i + 1 >= argc) {
+                std::cerr << "error: --shard needs a host:port argument\n";
+                return 1;
+            }
+            config.shard_addrs.push_back(argv[++i]);
         } else if (arg.rfind("--", 0) == 0) {
             std::cerr << "error: unknown option '" << arg << "'\n";
             return 1;
@@ -183,6 +193,13 @@ int main(int argc, char** argv) {
     if (!config.raft_peers.empty() &&
         (config.is_follower || !config.follower_addrs.empty())) {
         std::cerr << "error: --raft cannot be combined with --replica/--follower\n";
+        return 1;
+    }
+    if (!config.shard_addrs.empty() &&
+        (config.is_follower || !config.follower_addrs.empty() ||
+         !config.raft_peers.empty())) {
+        std::cerr << "error: --shard (router) cannot be combined with "
+                     "--replica/--follower/--raft\n";
         return 1;
     }
 

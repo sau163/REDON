@@ -13,9 +13,12 @@
 #include <string>
 #include <utility>
 
+#include <cctype>
+
 #include "command.h"
 #include "raft.h"
 #include "replication.h"
+#include "router.h"
 #include "thread_pool.h"
 #include "wal.h"
 
@@ -80,6 +83,33 @@ struct ConnectionScope {
     ConnectionScope(const ConnectionScope&) = delete;
     ConnectionScope& operator=(const ConnectionScope&) = delete;
 };
+
+// Pull the first two whitespace-delimited tokens out of a command line: the verb
+// (upper-cased) and the key. Used by the router to decide where to forward. '\r'
+// counts as whitespace, so a trailing CR from a CRLF client is handled.
+void verb_and_key(const std::string& line, std::string* verb, std::string* key) {
+    std::size_t i = 0;
+    const std::size_t n = line.size();
+    auto skip_ws = [&] {
+        while (i < n && std::isspace(static_cast<unsigned char>(line[i]))) {
+            ++i;
+        }
+    };
+    auto token = [&] {
+        std::size_t start = i;
+        while (i < n && !std::isspace(static_cast<unsigned char>(line[i]))) {
+            ++i;
+        }
+        return line.substr(start, i - start);
+    };
+    skip_ws();
+    *verb = token();
+    skip_ws();
+    *key = token();
+    for (char& c : *verb) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+}
 
 }  // namespace
 
@@ -159,6 +189,37 @@ void Server::setup_raft() {
               << " peer(s); electing a leader...\n";
 }
 
+void Server::setup_sharding() {
+    if (config_.shard_addrs.empty()) {
+        return;  // not a router
+    }
+    router_ = std::make_unique<Router>(config_.shard_addrs);
+    std::cout << "Role: router, sharding keys across " << router_->shard_count()
+              << " shard(s)\n";
+}
+
+std::string Server::route_line(const std::string& line, bool* should_close) {
+    *should_close = false;
+    std::string verb;
+    std::string key;
+    verb_and_key(line, &verb, &key);
+    if (verb.empty()) {
+        return "";  // blank line
+    }
+    if (verb == "QUIT" || verb == "EXIT") {
+        *should_close = true;
+        return "OK";
+    }
+    if (verb == "PING") {
+        return "PONG";  // keyless: answer locally
+    }
+    if (key.empty()) {
+        return "ERR ROUTER: '" + verb + "' needs a key to route on";
+    }
+    // Hash the key to a shard and forward the whole command line there.
+    return router_->forward(router_->shard_for(key), line);
+}
+
 int Server::run() {
     // 0. Load any persisted data, arm the WAL, and (leader) start replication
     //    before accepting clients.
@@ -167,6 +228,7 @@ int Server::run() {
     }
     setup_replication();
     setup_raft();
+    setup_sharding();
 
     // 1. Create the listening socket (IPv4, TCP).
     net::socket_t listen_sock = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -339,9 +401,12 @@ void Server::handle_client(net::socket_t client) {
 
             const bool was_replica_link = is_replica_link;
             bool should_close = false;
-            std::string reply = execute_line(line, store_, &should_close,
-                                             config_.is_follower,
-                                             &is_replica_link, raft_.get());
+            std::string reply =
+                router_ != nullptr
+                    ? route_line(line, &should_close)  // forward to the owning shard
+                    : execute_line(line, store_, &should_close,
+                                   config_.is_follower, &is_replica_link,
+                                   raft_.get());
             if (!was_replica_link && is_replica_link) {
                 // This connection just became the leader's replication stream,
                 // not an ordinary client: use the longer replication timeout so a
