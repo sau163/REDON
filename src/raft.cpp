@@ -1,6 +1,8 @@
 // raft.cpp — implementation of Raft leader election.
 #include "raft.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <sstream>
@@ -57,10 +59,10 @@ bool recv_line(net::socket_t sock, std::string* line) {
         if (c == '\n') {
             return true;
         }
-        line->push_back(c);
-        if (line->size() > kMaxLine) {
-            return false;
+        if (line->size() >= kMaxLine) {
+            return false;  // reply too long for a Raft RPC — malformed peer
         }
+        line->push_back(c);
     }
 }
 
@@ -90,11 +92,31 @@ bool rpc(const std::string& host, std::uint16_t port, int timeout_ms,
 }  // namespace
 
 RaftNode::RaftNode(Config config) : config_(std::move(config)) {
-    // Seed the RNG distinctly per node so peers pick different election timeouts
-    // (this is what makes split votes rare).
-    std::seed_seq seed{static_cast<long>(std::hash<std::string>{}(config_.self_id)),
-                       static_cast<long>(Clock::now().time_since_epoch().count())};
+    // Drop ourselves and any duplicates from the peer list. Otherwise a stray
+    // "--raft <self>" would make us send a RequestVote to ourselves, grant it,
+    // and count our own vote TWICE — letting us reach a "majority" without a real
+    // quorum, which would break the one-leader-per-term guarantee.
+    std::vector<std::string> peers;
+    for (const std::string& p : config_.peers) {
+        if (p != config_.self_id &&
+            std::find(peers.begin(), peers.end(), p) == peers.end()) {
+            peers.push_back(p);
+        }
+    }
+    config_.peers = std::move(peers);
+
+    // Seed the RNG with full entropy from the id and the clock (feeding both
+    // 32-bit halves, since seed_seq consumes 32-bit values) so peers pick
+    // different election timeouts — what makes split votes rare.
+    std::uint64_t h = std::hash<std::string>{}(config_.self_id);
+    std::uint64_t t =
+        static_cast<std::uint64_t>(Clock::now().time_since_epoch().count());
+    std::seed_seq seed{static_cast<std::uint32_t>(h),
+                       static_cast<std::uint32_t>(h >> 32),
+                       static_cast<std::uint32_t>(t),
+                       static_cast<std::uint32_t>(t >> 32)};
     rng_.seed(seed);
+
     last_heartbeat_sent_ = Clock::now();
     reset_election_deadline_locked();  // safe: single-threaded construction
 }

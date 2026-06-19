@@ -24,6 +24,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <random>
@@ -66,6 +67,10 @@ public:
     long current_term();
     Role role();
     std::string status_line();      // "role=<r> term=<t> leader=<id>"
+
+    // Number of peers AFTER self/duplicate filtering (immutable post-construction,
+    // so no lock needed). Exposed mainly so tests can confirm the filtering.
+    std::size_t peer_count() const { return config_.peers.size(); }
 
 private:
     using Clock = std::chrono::steady_clock;

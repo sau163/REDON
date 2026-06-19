@@ -71,7 +71,18 @@ void test_append_entries_term_rules() {
     CHECK(!node.is_leader());
 }
 
+// Self and duplicate peers are filtered out, so a misconfigured --raft can't
+// let a node count its own vote twice and reach a false majority.
+void test_self_and_duplicate_peers_are_filtered() {
+    RaftNode::Config c;
+    c.self_id = "self:1";
+    c.peers = {"self:1", "peer:2", "peer:2", "peer:3"};  // self + a duplicate
+    RaftNode node(c);
+    CHECK_EQ(node.peer_count(), static_cast<std::size_t>(2));  // only peer:2, peer:3
+}
+
 int main() {
+    RUN(test_self_and_duplicate_peers_are_filtered);
     RUN(test_vote_granted_once_per_term);
     RUN(test_higher_term_steps_down_and_revotes);
     RUN(test_append_entries_term_rules);
