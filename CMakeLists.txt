@@ -53,6 +53,7 @@ add_library(redon_core STATIC
   src/replication.cpp
   src/raft.cpp
   src/router.cpp
+  src/disk_store.cpp
 )
 target_link_libraries(redon_core PUBLIC redon_net Threads::Threads)
 
@@ -100,3 +101,8 @@ add_executable(test_router tests/test_router.cpp)
 target_link_libraries(test_router PRIVATE redon_core)
 target_include_directories(test_router PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 add_test(NAME router COMMAND test_router)
+
+add_executable(test_disk_store tests/test_disk_store.cpp)
+target_link_libraries(test_disk_store PRIVATE redon_core)
+target_include_directories(test_disk_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+add_test(NAME disk_store COMMAND test_disk_store)
