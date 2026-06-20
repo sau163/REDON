@@ -84,20 +84,27 @@ struct ConnectionScope {
     ConnectionScope& operator=(const ConnectionScope&) = delete;
 };
 
+// ASCII whitespace, matching command.cpp's tokenizer exactly (NOT std::isspace,
+// which is locale-dependent) so the router splits a key on the same byte
+// boundaries the shard will — even for non-ASCII key bytes under any locale.
+bool is_space(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' ||
+           c == '\f';
+}
+
 // Pull the first two whitespace-delimited tokens out of a command line: the verb
-// (upper-cased) and the key. Used by the router to decide where to forward. '\r'
-// counts as whitespace, so a trailing CR from a CRLF client is handled.
+// (upper-cased) and the key. Used by the router to decide where to forward.
 void verb_and_key(const std::string& line, std::string* verb, std::string* key) {
     std::size_t i = 0;
     const std::size_t n = line.size();
     auto skip_ws = [&] {
-        while (i < n && std::isspace(static_cast<unsigned char>(line[i]))) {
+        while (i < n && is_space(static_cast<unsigned char>(line[i]))) {
             ++i;
         }
     };
     auto token = [&] {
         std::size_t start = i;
-        while (i < n && !std::isspace(static_cast<unsigned char>(line[i]))) {
+        while (i < n && !is_space(static_cast<unsigned char>(line[i]))) {
             ++i;
         }
         return line.substr(start, i - start);

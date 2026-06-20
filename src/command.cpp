@@ -21,13 +21,23 @@
 namespace redon {
 namespace {
 
+// Whitespace for tokenizing a command — an EXPLICIT ASCII set, deliberately not
+// std::isspace, which is locale-dependent: a high byte (e.g. 0xA0) is whitespace
+// in some locales but not others. A key-value store must split keys the same way
+// everywhere, regardless of a process's LC_* settings, or the router (which
+// hashes the key) and the shard (which stores it) could disagree on a non-ASCII
+// key's boundary. (Phase 7 router uses the same set in server.cpp.)
+bool is_space(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' ||
+           c == '\f';
+}
+
 // Remove leading and trailing whitespace (spaces, tabs, and the trailing '\r'
 // that arrives when a client sends Windows-style "\r\n" line endings).
 std::string trim(const std::string& s) {
     std::size_t begin = 0;
     std::size_t end = s.size();
-    while (begin < end &&
-           std::isspace(static_cast<unsigned char>(s[begin]))) {
+    while (begin < end && is_space(static_cast<unsigned char>(s[begin]))) {
         ++begin;
     }
     // Skip a leading UTF-8 byte-order mark (EF BB BF) if present. Editors like
@@ -40,8 +50,7 @@ std::string trim(const std::string& s) {
         static_cast<unsigned char>(s[begin + 2]) == 0xBF) {
         begin += 3;
     }
-    while (end > begin &&
-           std::isspace(static_cast<unsigned char>(s[end - 1]))) {
+    while (end > begin && is_space(static_cast<unsigned char>(s[end - 1]))) {
         --end;
     }
     return s.substr(begin, end - begin);
@@ -61,11 +70,11 @@ std::string to_upper(const std::string& s) {
 std::string next_token(const std::string& s, std::size_t* pos) {
     std::size_t i = *pos;
     std::size_t start = i;
-    while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) {
+    while (i < s.size() && !is_space(static_cast<unsigned char>(s[i]))) {
         ++i;
     }
     std::string token = s.substr(start, i - start);
-    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) {
+    while (i < s.size() && is_space(static_cast<unsigned char>(s[i]))) {
         ++i;
     }
     *pos = i;
