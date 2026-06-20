@@ -21,16 +21,17 @@ phase — it is always a working program, just with more capabilities each time.
 | **4** ✅ | LRU eviction | Staying within a memory budget |
 | **5** ✅ | Replication | Surviving a whole machine dying |
 | **6** ✅ | Raft leader election | Agreeing who is in charge (consensus) |
-| 7 | Sharding | Storing more data than one machine holds |
+| **7** ✅ | Sharding | Storing more data than one machine holds |
 | 8 | RocksDB backend | Millions of keys, fast restart |
 | 9 | Metrics dashboard | Seeing what the system is doing |
 
-> **You are here: Phase 6 is complete.** The server serves many clients
+> **You are here: Phase 7 is complete.** The server serves many clients
 > concurrently, persists data so it survives a crash, bounds its memory with an
-> LRU cache, replicates writes to follower nodes, *and* a Raft cluster elects its
-> own leader — and automatically re-elects when the leader dies. See the per-phase
-> explainers: [1](docs/PHASE1.md) · [2](docs/PHASE2.md) · [3](docs/PHASE3.md) ·
-> [4](docs/PHASE4.md) · [5](docs/PHASE5.md) · [6](docs/PHASE6.md).
+> LRU cache, replicates writes to follower nodes, a Raft cluster elects its own
+> leader, *and* a router shards the keyspace across many machines for horizontal
+> scale. See the per-phase explainers: [1](docs/PHASE1.md) · [2](docs/PHASE2.md) ·
+> [3](docs/PHASE3.md) · [4](docs/PHASE4.md) · [5](docs/PHASE5.md) ·
+> [6](docs/PHASE6.md) · [7](docs/PHASE7.md).
 
 ---
 
@@ -159,6 +160,25 @@ the survivors elect a new one. This phase implements leader election (consensus 
 *who* leads); carrying the data through Raft's log is the documented next step. See
 [docs/PHASE6.md](docs/PHASE6.md).
 
+## Sharding (storing more than one machine holds)
+
+A **router** splits the keyspace across several **shard** servers by
+`hash(key) % N`, so the cluster holds far more than any single machine (Phase 7):
+
+```sh
+# three plain shard servers, then a router in front of them
+redon-server 127.0.0.1 6701 4 none
+redon-server 127.0.0.1 6702 4 none
+redon-server 127.0.0.1 6703 4 none
+redon-server 127.0.0.1 6700 4 none 0 0 --shard 127.0.0.1:6701 --shard 127.0.0.1:6702 --shard 127.0.0.1:6703
+```
+
+Talk only to the router (6700): `SET user:1 Bob` lands on one shard, `GET user:1`
+is routed back to it. Different keys spread evenly across the shards. (`% N`
+reshuffles everything if you change N — consistent hashing is the next step; and
+each shard is a single point of failure until you replicate it.) See
+[docs/PHASE7.md](docs/PHASE7.md).
+
 The worker-thread count is how many clients are served **at the same time**
 (defaults to your CPU's thread count). See [docs/PHASE2.md](docs/PHASE2.md).
 
@@ -202,6 +222,8 @@ Redon/
 │   ├── thread_pool.h/.cpp# worker pool: queue + mutex + condition_variable (Phase 2)
 │   ├── wal.h/.cpp        # Write-Ahead Log: append + replay for durability (Phase 3)
 │   ├── replication.h/.cpp# leader-side replication to follower nodes (Phase 5)
+│   ├── raft.h/.cpp       # Raft leader election (terms, votes, quorum) (Phase 6)
+│   ├── router.h/.cpp     # sharding: hash(key) %% N, forward to the shard (Phase 7)
 │   ├── server.h/.cpp     # TCP server: accept clients, hand each to the pool
 │   ├── main.cpp          # entry point for redon-server
 │   └── client_main.cpp   # entry point for redon-cli
@@ -217,6 +239,8 @@ Redon/
 │   ├── PHASE2.md         # how Phase 2 (concurrency) works, explained
 │   ├── PHASE3.md         # how Phase 3 (persistence) works, explained
 │   ├── PHASE4.md         # how Phase 4 (LRU eviction) works, explained
-│   └── PHASE5.md         # how Phase 5 (replication) works, explained
+│   ├── PHASE5.md         # how Phase 5 (replication) works, explained
+│   ├── PHASE6.md         # how Phase 6 (Raft leader election) works, explained
+│   └── PHASE7.md         # how Phase 7 (sharding) works, explained
 └── CMakeLists.txt        # build configuration
 ```
