@@ -122,7 +122,9 @@ std::string execute_line(const std::string& line, Storage& store,
         if (is_replica_link != nullptr) {
             *is_replica_link = true;
         }
-        store.clear();
+        if (!store.clear()) {
+            return "ERR replica storage failed to reset for sync";
+        }
         return "OK";
     }
 

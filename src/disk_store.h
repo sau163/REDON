@@ -39,7 +39,7 @@ public:
     bool del(const std::string& key);                            // append tombstone
     bool exists(const std::string& key) const { return index_.count(key) != 0; }
     std::size_t size() const { return index_.size(); }
-    void clear();
+    bool clear();  // false if the file couldn't be reopened (backend now unusable)
 
     // (key, value) for every live key — reads each value from disk. Used by
     // replication's snapshot.

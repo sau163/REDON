@@ -163,14 +163,14 @@ std::vector<std::pair<std::string, std::string>> Storage::snapshot_locked(
     return snap;
 }
 
-void Storage::clear() {
+bool Storage::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (disk_) {
-        disk_->clear();
-        return;
+        return disk_->clear();
     }
     items_.clear();
     index_.clear();
+    return true;
 }
 
 void Storage::set_replaying(bool replaying) {

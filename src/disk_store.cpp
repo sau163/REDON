@@ -1,8 +1,10 @@
 // disk_store.cpp — implementation of the log-structured disk storage engine.
 #include "disk_store.h"
 
-#include <cstdio>   // std::remove, std::rename
+#include <cstdint>
+#include <filesystem>
 #include <ios>
+#include <system_error>
 #include <utility>
 
 namespace redon {
@@ -40,7 +42,10 @@ bool DiskStore::read_value(const Entry& e, std::string* out) {
 }
 
 bool DiskStore::set(const std::string& key, const std::string& value) {
-    if (!ok_) {
+    // Empty keys/values are rejected so set() and recover() agree on what's a
+    // valid record (recover() treats a zero length as corruption). The protocol
+    // already forbids them; this keeps the two halves consistent.
+    if (!ok_ || key.empty() || value.empty()) {
         return false;
     }
     file_.clear();
@@ -71,7 +76,7 @@ bool DiskStore::get(const std::string& key, std::string* out) {
 }
 
 bool DiskStore::del(const std::string& key) {
-    if (!ok_) {
+    if (!ok_ || key.empty()) {
         return false;
     }
     auto it = index_.find(key);
@@ -92,13 +97,14 @@ bool DiskStore::del(const std::string& key) {
     return true;
 }
 
-void DiskStore::clear() {
+bool DiskStore::clear() {
     index_.clear();
     file_.close();
     // Truncate by reopening with trunc, then reopen for normal read+write.
     { std::ofstream trunc(path_, std::ios::out | std::ios::trunc | std::ios::binary); }
     file_.open(path_, std::ios::in | std::ios::out | std::ios::binary);
     ok_ = file_.is_open();
+    return ok_;
 }
 
 std::vector<std::pair<std::string, std::string>> DiskStore::snapshot() {
@@ -117,6 +123,7 @@ void DiskStore::recover() {
     file_.clear();
     file_.seekg(0, std::ios::beg);
 
+    std::streamoff last_good = 0;  // byte offset just past the last COMPLETE record
     std::string op;
     while (file_ >> op) {  // reads a whitespace-delimited token
         if (op == "SET") {
@@ -148,13 +155,30 @@ void DiskStore::recover() {
         } else {
             break;  // corruption: stop, keeping every complete record before it
         }
+        last_good = file_.tellg();  // this record parsed cleanly to here
     }
-    file_.clear();  // clear EOF so later reads/writes work
+    file_.clear();
+
+    // Heal a corrupt/truncated tail: physically drop everything past the last
+    // complete record. Otherwise the next append would land AFTER the garbage,
+    // and a later restart would stop at the garbage again and lose those writes.
+    file_.seekg(0, std::ios::end);
+    std::streamoff file_size = file_.tellg();
+    file_.clear();
+    if (file_size > last_good) {
+        file_.close();
+        std::error_code ec;
+        std::filesystem::resize_file(
+            path_, static_cast<std::uintmax_t>(last_good), ec);
+        file_.open(path_, std::ios::in | std::ios::out | std::ios::binary);
+        ok_ = file_.is_open();
+        if (!ok_) {
+            return;
+        }
+        file_size = last_good;
+    }
 
     // Compact if the file is mostly garbage (lots of overwrites/deletes).
-    file_.seekg(0, std::ios::end);
-    const std::streamoff file_size = file_.tellg();
-    file_.clear();
     std::size_t live_bytes = 0;
     for (const auto& kv : index_) {
         live_bytes += kv.first.size() + kv.second.value_len + 24;  // ~header+nl
@@ -168,15 +192,17 @@ void DiskStore::recover() {
 void DiskStore::compact() {
     const std::string tmp = path_ + ".tmp";
     std::unordered_map<std::string, Entry> new_index;
+    bool failed = false;
     {
         std::ofstream out(tmp, std::ios::out | std::ios::trunc | std::ios::binary);
         if (!out) {
-            return;  // can't compact; keep the existing file
+            return;  // can't even open the temp; keep the existing file
         }
         for (const auto& kv : index_) {
             std::string value;
             if (!read_value(kv.second, &value)) {
-                continue;
+                failed = true;  // a read failed: abort rather than DROP a live key
+                break;
             }
             out << "SET " << kv.first.size() << " " << value.size() << " ";
             out.write(kv.first.data(),
@@ -188,18 +214,25 @@ void DiskStore::compact() {
         }
         out.flush();
         if (!out) {
-            return;  // write failed; keep the existing file
+            failed = true;
         }
     }
 
-    // Replace the data file with the compacted one and adopt the new offsets.
-    // (There is a brief window between remove and rename where a crash would lose
-    // the file; a production engine renames atomically. Acceptable here, and this
-    // runs only at startup before serving clients.)
+    std::error_code ec;
+    if (failed) {
+        std::filesystem::remove(tmp, ec);  // abandon compaction; original intact
+        return;
+    }
+
+    // Atomically replace the data file with the compacted one. std::filesystem::
+    // rename overwrites the destination in one step (no remove-then-rename gap),
+    // so on failure the original file is untouched and the index stays valid.
     file_.close();
-    std::remove(path_.c_str());
-    if (std::rename(tmp.c_str(), path_.c_str()) == 0) {
-        index_ = std::move(new_index);
+    std::filesystem::rename(tmp, path_, ec);
+    if (!ec) {
+        index_ = std::move(new_index);  // adopt the new offsets
+    } else {
+        std::filesystem::remove(tmp, ec);  // keep the old file and its index
     }
     file_.open(path_, std::ios::in | std::ios::out | std::ios::binary);
     ok_ = file_.is_open();

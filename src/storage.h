@@ -94,8 +94,9 @@ public:
         const std::function<void()>& while_locked = {});
 
     // Remove all keys (used by a follower when the leader starts a full sync).
-    // Does NOT touch the WAL — replicas should run without one.
-    void clear();
+    // Does NOT touch the WAL — replicas should run without one. Returns false
+    // only if an attached disk backend failed to reset (then it's unusable).
+    bool clear();
 
     // Toggle replay mode. While replaying a log, eviction is SUPPRESSED so only
     // the explicitly-logged DEL records remove keys (replay can't see the

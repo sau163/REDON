@@ -1,5 +1,6 @@
 // test_disk_store.cpp — tests for the on-disk storage engine.
 #include <cstdio>  // std::remove
+#include <fstream>
 #include <string>
 
 #include "disk_store.h"
@@ -108,8 +109,45 @@ void test_compaction_preserves_data() {
     cleanup();
 }
 
+// A corrupt/truncated tail (from a crash mid-append) must be HEALED on recovery,
+// so writes appended afterward survive the next restart too. (Regression for the
+// "tail left in place -> later writes lost" bug.)
+void test_corrupt_tail_is_healed() {
+    cleanup();
+    {
+        DiskStore d(kPath);
+        d.set("a", "1");
+        d.set("b", "2");
+    }
+    // Append a truncated record (header says a 10-byte value, only 2 bytes given,
+    // no newline) — small enough that the compaction threshold won't trip.
+    {
+        std::ofstream f(kPath, std::ios::out | std::ios::app | std::ios::binary);
+        f << "SET 1 10 cXY";
+    }
+    {
+        DiskStore d(kPath);  // recover() heals the tail
+        CHECK(d.ok());
+        std::string v;
+        CHECK(d.get("a", &v));
+        CHECK(!d.exists("c"));  // torn record dropped
+        CHECK(d.set("z", "9"));  // append after healing
+    }
+    {
+        DiskStore d(kPath);  // the post-heal write must survive
+        std::string v;
+        CHECK(d.get("a", &v));
+        CHECK_EQ(v, std::string("1"));
+        CHECK(d.get("z", &v));
+        CHECK_EQ(v, std::string("9"));
+        CHECK(!d.exists("c"));
+    }
+    cleanup();
+}
+
 int main() {
     RUN(test_basic_and_persistence);
+    RUN(test_corrupt_tail_is_healed);
     RUN(test_missing_key);
     RUN(test_clear);
     RUN(test_snapshot);
