@@ -38,6 +38,7 @@ struct ServerConfig {
     std::vector<std::string> follower_addrs;  // leader: "host:port" of each follower
     std::vector<std::string> raft_peers;      // Raft cluster: the OTHER nodes
     std::vector<std::string> shard_addrs;     // router: "host:port" of each shard
+    std::string disk_path;                    // non-empty => on-disk storage engine
 };
 
 class Server {

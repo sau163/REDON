@@ -228,9 +228,18 @@ std::string Server::route_line(const std::string& line, bool* should_close) {
 }
 
 int Server::run() {
-    // 0. Load any persisted data, arm the WAL, and (leader) start replication
-    //    before accepting clients.
-    if (!setup_persistence()) {
+    // 0. Set up storage (on-disk engine OR in-memory + WAL), then replication,
+    //    Raft, and sharding, before accepting clients.
+    if (!config_.disk_path.empty()) {
+        // Phase 8: the on-disk engine is its own durability — no WAL.
+        if (!store_.open_disk_backend(config_.disk_path)) {
+            std::cerr << "error: could not open disk store '" << config_.disk_path
+                      << "'\n";
+            return 1;
+        }
+        std::cout << "Persistence: on-disk engine at " << config_.disk_path
+                  << " (" << store_.size() << " key(s) loaded)\n";
+    } else if (!setup_persistence()) {
         return 1;
     }
     setup_replication();

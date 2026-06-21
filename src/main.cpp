@@ -16,6 +16,10 @@
 //   --shard <host:port>       forward each command to the shard owning its key
 //                             (hash(key) %% N over the listed shards). Repeat the
 //                             flag once per shard. The shards are plain servers.
+// Storage-engine flag (Phase 8):
+//   --disk <path>             use the on-disk storage engine (values live on disk,
+//                             survive restarts) instead of the in-memory map.
+//                             Replaces the WAL; not combinable with --shard.
 //
 // Defaults: WAL "redon.wal" (use "none" for in-memory), idle timeout 300s
 // (0 disables, like Redis `timeout`), capacity 0 = unbounded (like Redis
@@ -140,6 +144,12 @@ int main(int argc, char** argv) {
                 return 1;
             }
             config.shard_addrs.push_back(argv[++i]);
+        } else if (arg == "--disk") {
+            if (i + 1 >= argc) {
+                std::cerr << "error: --disk needs a file path argument\n";
+                return 1;
+            }
+            config.disk_path = argv[++i];
         } else if (arg.rfind("--", 0) == 0) {
             std::cerr << "error: unknown option '" << arg << "'\n";
             return 1;
@@ -200,6 +210,11 @@ int main(int argc, char** argv) {
          !config.raft_peers.empty())) {
         std::cerr << "error: --shard (router) cannot be combined with "
                      "--replica/--follower/--raft\n";
+        return 1;
+    }
+    if (!config.disk_path.empty() && !config.shard_addrs.empty()) {
+        std::cerr << "error: --disk cannot be combined with --shard "
+                     "(a router stores no data)\n";
         return 1;
     }
 

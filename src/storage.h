@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <functional>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -32,12 +33,24 @@ namespace redon {
 
 class Wal;          // forward declaration; storage.cpp includes wal.h
 class Replicator;   // forward declaration; storage.cpp includes replication.h
+class DiskStore;    // forward declaration; storage.cpp includes disk_store.h
 
 class Storage {
 public:
     // capacity 0 = unbounded (never evict). Otherwise the cache holds at most
     // `capacity` keys, evicting the least-recently-used to stay within it.
     explicit Storage(std::size_t capacity = 0);
+
+    // Declared (defaulted in storage.cpp, where DiskStore is complete) so the
+    // unique_ptr<DiskStore> member can be destroyed.
+    ~Storage();
+
+    // Switch this Storage to a persistent on-disk backend at `path` (Phase 8):
+    // values live on disk, not in RAM, and survive restarts. When enabled, the
+    // in-memory LRU map and the Write-Ahead Log are bypassed (the engine is its
+    // own durability). Returns false if the file couldn't be opened. Call once at
+    // startup before serving clients.
+    bool open_disk_backend(const std::string& path);
 
     // Store value under key and mark it most-recently-used. Inserting a new key
     // when full evicts the least-recently-used key. Returns false WITHOUT
@@ -106,6 +119,7 @@ private:
     bool replaying_ = false;                          // suppress eviction in replay
     Wal* wal_ = nullptr;                             // not owned; nullptr = no log
     Replicator* replicator_ = nullptr;               // not owned; nullptr = no repl
+    std::unique_ptr<DiskStore> disk_;                // non-null = on-disk backend
 };
 
 }  // namespace redon

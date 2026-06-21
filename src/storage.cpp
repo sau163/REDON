@@ -1,8 +1,10 @@
 // storage.cpp — implementation of the LRU storage engine declared in storage.h.
 #include "storage.h"
 
+#include <memory>
 #include <utility>
 
+#include "disk_store.h"
 #include "replication.h"
 #include "wal.h"
 
@@ -10,8 +12,32 @@ namespace redon {
 
 Storage::Storage(std::size_t capacity) : capacity_(capacity) {}
 
+// Defined here (where DiskStore is complete) so unique_ptr<DiskStore> destroys.
+Storage::~Storage() = default;
+
+bool Storage::open_disk_backend(const std::string& path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    disk_ = std::make_unique<DiskStore>(path);
+    if (!disk_->ok()) {
+        disk_.reset();
+        return false;
+    }
+    return true;
+}
+
 bool Storage::set(const std::string& key, const std::string& value) {
     std::lock_guard<std::mutex> lock(mutex_);
+    // On-disk backend (Phase 8): it persists the write itself; the WAL and LRU
+    // don't apply. Replication still happens.
+    if (disk_) {
+        if (!disk_->set(key, value)) {
+            return false;  // the durable disk write failed
+        }
+        if (replicator_ != nullptr) {
+            replicator_->replicate_set(key, value);
+        }
+        return true;
+    }
     // Write-ahead: log the change BEFORE applying it (Phase 3). Refuse the
     // mutation if the durable write failed, so memory never diverges from the
     // log. Logging under the same lock as the apply keeps log order == apply
@@ -46,6 +72,9 @@ bool Storage::set(const std::string& key, const std::string& value) {
 
 bool Storage::get(const std::string& key, std::string* out) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (disk_) {
+        return disk_->get(key, out);  // read the value from disk; no recency
+    }
     auto it = index_.find(key);
     if (it == index_.end()) {
         return false;
@@ -60,6 +89,19 @@ std::size_t Storage::del(const std::string& key, bool* durable) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (durable != nullptr) {
         *durable = true;
+    }
+    if (disk_) {
+        const bool removed = disk_->del(key);
+        if (!disk_->ok()) {  // a write failure (not just a missing key)
+            if (durable != nullptr) {
+                *durable = false;
+            }
+            return 0;
+        }
+        if (removed && replicator_ != nullptr) {
+            replicator_->replicate_del(key);
+        }
+        return removed ? 1 : 0;
     }
     auto it = index_.find(key);
     if (it == index_.end()) {
@@ -82,11 +124,17 @@ std::size_t Storage::del(const std::string& key, bool* durable) {
 
 bool Storage::exists(const std::string& key) const {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (disk_) {
+        return disk_->exists(key);
+    }
     return index_.find(key) != index_.end();
 }
 
 std::size_t Storage::size() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (disk_) {
+        return disk_->size();
+    }
     return index_.size();
 }
 
@@ -103,8 +151,12 @@ void Storage::attach_replicator(Replicator* replicator) {
 std::vector<std::pair<std::string, std::string>> Storage::snapshot_locked(
     const std::function<void()>& while_locked) {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<std::pair<std::string, std::string>> snap(items_.begin(),
-                                                          items_.end());
+    std::vector<std::pair<std::string, std::string>> snap;
+    if (disk_) {
+        snap = disk_->snapshot();  // reads every value from disk
+    } else {
+        snap.assign(items_.begin(), items_.end());
+    }
     if (while_locked) {
         while_locked();  // e.g. the replicator marks the follower "streaming"
     }
@@ -113,6 +165,10 @@ std::vector<std::pair<std::string, std::string>> Storage::snapshot_locked(
 
 void Storage::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (disk_) {
+        disk_->clear();
+        return;
+    }
     items_.clear();
     index_.clear();
 }
