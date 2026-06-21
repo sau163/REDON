@@ -7,13 +7,13 @@
 #include "server.h"
 
 #include <atomic>
+#include <cctype>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
-
-#include <cctype>
 
 #include "command.h"
 #include "raft.h"
@@ -65,20 +65,20 @@ bool send_line(net::socket_t sock, const std::string& reply) {
     return send_all(sock, out.data(), out.size());
 }
 
-// RAII for one served connection. It bumps the live-connection counter on
-// construction and, on destruction — whether the task returns normally OR an
-// exception unwinds through it — closes the socket and drops the counter. Both
-// cleanup steps are noexcept, so running them in a destructor is safe.
+// RAII for one served connection. It records the connect on construction and, on
+// destruction — whether the task returns normally OR an exception unwinds through
+// it — closes the socket and records the disconnect. Both cleanup steps are
+// noexcept, so running them in a destructor is safe.
 struct ConnectionScope {
-    std::atomic<int>* counter;
+    Metrics* metrics;
     net::socket_t sock;
 
-    ConnectionScope(std::atomic<int>* c, net::socket_t s) : counter(c), sock(s) {
-        counter->fetch_add(1);
+    ConnectionScope(Metrics* m, net::socket_t s) : metrics(m), sock(s) {
+        metrics->on_connect();
     }
     ~ConnectionScope() {
         net::close_socket(sock);
-        counter->fetch_sub(1);
+        metrics->on_disconnect();
     }
     ConnectionScope(const ConnectionScope&) = delete;
     ConnectionScope& operator=(const ConnectionScope&) = delete;
@@ -110,6 +110,14 @@ void verb_and_key(const std::string& line, std::string* verb, std::string* key) 
         return line.substr(start, i - start);
     };
     skip_ws();
+    // Skip a leading UTF-8 BOM, matching command.cpp's trim(), so the router and
+    // the shard agree on the key (and metrics see the real verb) even when the
+    // first line carries a BOM (e.g. a Notepad-saved command file).
+    if (n - i >= 3 && static_cast<unsigned char>(line[i]) == 0xEF &&
+        static_cast<unsigned char>(line[i + 1]) == 0xBB &&
+        static_cast<unsigned char>(line[i + 2]) == 0xBF) {
+        i += 3;
+    }
     *verb = token();
     skip_ws();
     *key = token();
@@ -205,6 +213,23 @@ void Server::setup_sharding() {
               << " shard(s)\n";
 }
 
+void Server::setup_metrics() {
+    if (config_.metrics_port <= 0) {
+        return;
+    }
+    metrics_http_ = std::make_unique<MetricsHttp>(
+        config_.host, static_cast<std::uint16_t>(config_.metrics_port),
+        [this] { return metrics_.prometheus_text(store_.size()); });
+    if (metrics_http_->start()) {
+        std::cout << "Metrics: Prometheus endpoint on http://" << config_.host
+                  << ":" << config_.metrics_port << "/metrics\n";
+    } else {
+        std::cerr << "warning: could not start metrics endpoint on port "
+                  << config_.metrics_port << "\n";
+        metrics_http_.reset();
+    }
+}
+
 std::string Server::route_line(const std::string& line, bool* should_close) {
     *should_close = false;
     std::string verb;
@@ -245,6 +270,7 @@ int Server::run() {
     setup_replication();
     setup_raft();
     setup_sharding();
+    setup_metrics();
 
     // 1. Create the listening socket (IPv4, TCP).
     net::socket_t listen_sock = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -343,13 +369,13 @@ int Server::run() {
             bool submitted = false;
             try {
                 submitted = pool.submit([this, client] {
-                    ConnectionScope scope(&active_clients_, client);
+                    ConnectionScope scope(&metrics_, client);
                     try {
                         log("client connected (active: " +
-                            std::to_string(active_clients_.load()) + ")");
+                            std::to_string(metrics_.connected()) + ")");
                         handle_client(client);
                         log("client disconnected (active: " +
-                            std::to_string(active_clients_.load() - 1) + ")");
+                            std::to_string(metrics_.connected() - 1) + ")");
                     } catch (...) {
                         // One client's failure must not crash the worker;
                         // ConnectionScope still cleans up.
@@ -415,14 +441,39 @@ void Server::handle_client(net::socket_t client) {
             std::string line = inbuf.substr(0, newline);
             inbuf.erase(0, newline + 1);
 
+            std::string verb;
+            std::string key;
+            verb_and_key(line, &verb, &key);
+
             const bool was_replica_link = is_replica_link;
             bool should_close = false;
-            std::string reply =
-                router_ != nullptr
-                    ? route_line(line, &should_close)  // forward to the owning shard
-                    : execute_line(line, store_, &should_close,
-                                   config_.is_follower, &is_replica_link,
-                                   raft_.get());
+            const auto t0 = std::chrono::steady_clock::now();
+            std::string reply;
+            if (verb == "INFO") {
+                reply = metrics_.info_text(store_.size());  // node-local stats
+            } else if (router_ != nullptr) {
+                reply = route_line(line, &should_close);  // forward to the shard
+            } else {
+                reply = execute_line(line, store_, &should_close,
+                                     config_.is_follower, &is_replica_link,
+                                     raft_.get());
+            }
+            const auto t1 = std::chrono::steady_clock::now();
+
+            // Record metrics for real client commands — skip blank lines, the
+            // silent replication stream, and internal __RPC__ verbs.
+            if (!verb.empty() && !was_replica_link &&
+                verb.rfind("__", 0) != 0) {
+                metrics_.on_latency(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0)
+                        .count());
+                const bool err = reply.rfind("ERR", 0) == 0;
+                metrics_.on_command(verb, err);
+                if (verb == "GET") {
+                    metrics_.on_get(!err && reply != "(nil)");
+                }
+            }
+
             if (!was_replica_link && is_replica_link) {
                 // This connection just became the leader's replication stream,
                 // not an ordinary client: use the longer replication timeout so a

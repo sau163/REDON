@@ -20,6 +20,9 @@
 //   --disk <path>             use the on-disk storage engine (values live on disk,
 //                             survive restarts) instead of the in-memory map.
 //                             Replaces the WAL; not combinable with --shard.
+// Monitoring flag (Phase 9):
+//   --metrics-port <n>        serve Prometheus metrics at http://host:n/metrics.
+//                             The INFO command also reports stats on the main port.
 //
 // Defaults: WAL "redon.wal" (use "none" for in-memory), idle timeout 300s
 // (0 disables, like Redis `timeout`), capacity 0 = unbounded (like Redis
@@ -150,6 +153,17 @@ int main(int argc, char** argv) {
                 return 1;
             }
             config.disk_path = argv[++i];
+        } else if (arg == "--metrics-port") {
+            if (i + 1 >= argc) {
+                std::cerr << "error: --metrics-port needs a port number\n";
+                return 1;
+            }
+            std::uint16_t mp = 0;
+            if (!parse_port(argv[++i], &mp)) {
+                std::cerr << "error: invalid metrics port '" << argv[i] << "'\n";
+                return 1;
+            }
+            config.metrics_port = mp;
         } else if (arg.rfind("--", 0) == 0) {
             std::cerr << "error: unknown option '" << arg << "'\n";
             return 1;

@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "metrics.h"
 #include "net.h"
 #include "storage.h"
 
@@ -39,6 +40,7 @@ struct ServerConfig {
     std::vector<std::string> raft_peers;      // Raft cluster: the OTHER nodes
     std::vector<std::string> shard_addrs;     // router: "host:port" of each shard
     std::string disk_path;                    // non-empty => on-disk storage engine
+    int metrics_port = 0;                     // >0 => Prometheus /metrics endpoint
 };
 
 class Server {
@@ -77,6 +79,9 @@ private:
     // Router mode: if shards are configured, build the key router.
     void setup_sharding();
 
+    // If a metrics port is configured, start the Prometheus /metrics endpoint.
+    void setup_metrics();
+
     ServerConfig config_;
     std::unique_ptr<Wal> wal_;          // owns the log; attached to store_
     Storage store_;                     // the one shared database (thread-safe)
@@ -84,8 +89,9 @@ private:
     std::unique_ptr<RaftNode> raft_;          // Raft cluster: leader election
     std::unique_ptr<Router> router_;          // router: forwards to shards
 
-    std::mutex log_mutex_;                 // serializes log() output
-    std::atomic<int> active_clients_{0};   // currently-connected client count
+    Metrics metrics_;                          // observability counters
+    std::unique_ptr<MetricsHttp> metrics_http_;  // Prometheus /metrics endpoint
+    std::mutex log_mutex_;                      // serializes log() output
 };
 
 }  // namespace redon
