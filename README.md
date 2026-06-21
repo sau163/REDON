@@ -22,16 +22,16 @@ phase — it is always a working program, just with more capabilities each time.
 | **5** ✅ | Replication | Surviving a whole machine dying |
 | **6** ✅ | Raft leader election | Agreeing who is in charge (consensus) |
 | **7** ✅ | Sharding | Storing more data than one machine holds |
-| 8 | RocksDB backend | Millions of keys, fast restart |
+| **8** ✅ | On-disk storage engine | Values on disk (beyond RAM), fast restart |
 | 9 | Metrics dashboard | Seeing what the system is doing |
 
-> **You are here: Phase 7 is complete.** The server serves many clients
-> concurrently, persists data so it survives a crash, bounds its memory with an
-> LRU cache, replicates writes to follower nodes, a Raft cluster elects its own
-> leader, *and* a router shards the keyspace across many machines for horizontal
-> scale. See the per-phase explainers: [1](docs/PHASE1.md) · [2](docs/PHASE2.md) ·
+> **You are here: Phase 8 is complete.** The server serves many clients
+> concurrently, persists data, bounds memory with an LRU cache, replicates to
+> followers, elects a leader via Raft, shards the keyspace across machines, *and*
+> can store values on disk (beyond RAM) with a from-scratch log-structured engine.
+> See the per-phase explainers: [1](docs/PHASE1.md) · [2](docs/PHASE2.md) ·
 > [3](docs/PHASE3.md) · [4](docs/PHASE4.md) · [5](docs/PHASE5.md) ·
-> [6](docs/PHASE6.md) · [7](docs/PHASE7.md).
+> [6](docs/PHASE6.md) · [7](docs/PHASE7.md) · [8](docs/PHASE8.md).
 
 ---
 
@@ -179,6 +179,21 @@ reshuffles everything if you change N — consistent hashing is the next step; a
 each shard is a single point of failure until you replicate it.) See
 [docs/PHASE7.md](docs/PHASE7.md).
 
+## On-disk storage engine (data bigger than RAM)
+
+By default values live in RAM. Pass `--disk <path>` to use a from-scratch
+**log-structured** storage engine that keeps **values on disk** with only a small
+key→offset index in memory (Phase 8):
+
+```sh
+redon-server 127.0.0.1 6380 4 none 0 0 --disk redon.db
+```
+
+Write keys, kill the server, restart with the same `--disk redon.db` — the data is
+back (no WAL needed; the data file *is* the database), and recovery rebuilds the
+index quickly by skipping over the value bytes. `cat redon.db` shows the records.
+See [docs/PHASE8.md](docs/PHASE8.md).
+
 The worker-thread count is how many clients are served **at the same time**
 (defaults to your CPU's thread count). See [docs/PHASE2.md](docs/PHASE2.md).
 
@@ -217,7 +232,8 @@ server's worker count up to roughly your core count.
 Redon/
 ├── src/
 │   ├── net.h             # cross-platform socket helpers (Winsock <-> POSIX)
-│   ├── storage.h/.cpp    # the storage engine: an O(1) LRU cache (Phase 4)
+│   ├── storage.h/.cpp    # storage front-end: O(1) LRU cache (P4) or disk backend
+│   ├── disk_store.h/.cpp # on-disk log-structured engine, values off RAM (Phase 8)
 │   ├── command.h/.cpp    # parse a line of text into a command and run it
 │   ├── thread_pool.h/.cpp# worker pool: queue + mutex + condition_variable (Phase 2)
 │   ├── wal.h/.cpp        # Write-Ahead Log: append + replay for durability (Phase 3)
@@ -241,6 +257,7 @@ Redon/
 │   ├── PHASE4.md         # how Phase 4 (LRU eviction) works, explained
 │   ├── PHASE5.md         # how Phase 5 (replication) works, explained
 │   ├── PHASE6.md         # how Phase 6 (Raft leader election) works, explained
-│   └── PHASE7.md         # how Phase 7 (sharding) works, explained
+│   ├── PHASE7.md         # how Phase 7 (sharding) works, explained
+│   └── PHASE8.md         # how Phase 8 (on-disk storage engine) works, explained
 └── CMakeLists.txt        # build configuration
 ```
