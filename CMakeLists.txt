@@ -66,6 +66,12 @@ target_link_libraries(redon-server PRIVATE redon_core)
 add_executable(redon-cli src/client_main.cpp)
 target_link_libraries(redon-cli PRIVATE redon_net)
 
+# The browser gateway: a tiny HTTP server that serves a web UI and bridges it to
+# the Redon TCP server, so anyone can use Redon from a browser. Depends only on
+# the socket header + threads, not on the storage engine.
+add_executable(redon-web src/web.cpp src/web_main.cpp)
+target_link_libraries(redon-web PRIVATE redon_net Threads::Threads)
+
 # A concurrent load generator / benchmark (uses threads + sockets, not the engine).
 add_executable(redon-bench bench/redon_bench.cpp)
 target_link_libraries(redon-bench PRIVATE redon_net Threads::Threads)
