@@ -23,15 +23,16 @@ phase — it is always a working program, just with more capabilities each time.
 | **6** ✅ | Raft leader election | Agreeing who is in charge (consensus) |
 | **7** ✅ | Sharding | Storing more data than one machine holds |
 | **8** ✅ | On-disk storage engine | Values on disk (beyond RAM), fast restart |
-| 9 | Metrics dashboard | Seeing what the system is doing |
+| **9** ✅ | Metrics / monitoring | Seeing what the system is doing |
 
-> **You are here: Phase 8 is complete.** The server serves many clients
-> concurrently, persists data, bounds memory with an LRU cache, replicates to
-> followers, elects a leader via Raft, shards the keyspace across machines, *and*
-> can store values on disk (beyond RAM) with a from-scratch log-structured engine.
-> See the per-phase explainers: [1](docs/PHASE1.md) · [2](docs/PHASE2.md) ·
-> [3](docs/PHASE3.md) · [4](docs/PHASE4.md) · [5](docs/PHASE5.md) ·
-> [6](docs/PHASE6.md) · [7](docs/PHASE7.md) · [8](docs/PHASE8.md).
+> **All nine phases are complete.** Redon serves many clients concurrently,
+> persists data, bounds memory with an LRU cache, replicates to followers, elects
+> a leader via Raft, shards the keyspace across machines, can store values on disk
+> beyond RAM, and exposes Prometheus metrics. Each phase was implemented,
+> adversarially reviewed, hardened, tested, and explained — see the per-phase
+> walkthroughs: [1](docs/PHASE1.md) · [2](docs/PHASE2.md) · [3](docs/PHASE3.md) ·
+> [4](docs/PHASE4.md) · [5](docs/PHASE5.md) · [6](docs/PHASE6.md) ·
+> [7](docs/PHASE7.md) · [8](docs/PHASE8.md) · [9](docs/PHASE9.md).
 
 ---
 
@@ -193,6 +194,21 @@ Write keys, kill the server, restart with the same `--disk redon.db` — the dat
 back (no WAL needed; the data file *is* the database), and recovery rebuilds the
 index quickly by skipping over the value bytes. `cat redon.db` shows the records.
 See [docs/PHASE8.md](docs/PHASE8.md).
+
+## Monitoring (Prometheus + INFO)
+
+`--metrics-port <n>` serves Prometheus metrics, and the `INFO` command gives a
+quick human view (Phase 9):
+
+```sh
+redon-server 127.0.0.1 6380 4 none 0 0 --metrics-port 9090
+redon-cli 6380          # INFO -> uptime_s=.. commands=.. get=.. hit_rate=.. keys=..
+curl http://127.0.0.1:9090/metrics    # Prometheus exposition format
+```
+
+Counters (commands by verb, hit rate, errors, connections, latency) are lock-free
+atomics, so they don't slow the hot path. Point Prometheus at `/metrics` and graph
+it in Grafana. See [docs/PHASE9.md](docs/PHASE9.md).
 
 The worker-thread count is how many clients are served **at the same time**
 (defaults to your CPU's thread count). See [docs/PHASE2.md](docs/PHASE2.md).
