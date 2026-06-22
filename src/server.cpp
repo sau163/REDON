@@ -469,8 +469,11 @@ void Server::handle_client(net::socket_t client) {
                         .count());
                 const bool err = reply.rfind("ERR", 0) == 0;
                 metrics_.on_command(verb, err);
-                if (verb == "GET") {
-                    metrics_.on_get(!err && reply != "(nil)");
+                if (verb == "GET" && !err) {
+                    // Only a *successful* GET is a keyspace hit/miss; a GET that
+                    // errored (e.g. wrong arg count) never touched the keyspace,
+                    // so it must not be counted as a miss.
+                    metrics_.on_get(reply != "(nil)");
                 }
             }
 
