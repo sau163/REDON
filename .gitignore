@@ -1,6 +1,8 @@
 # Build output
 /build/
+/build_clean/
 /out/
+/dist/
 *.exe
 *.obj
 *.o
@@ -24,3 +26,4 @@ cmake_install.cmake
 *.log
 *.wal
 *.rdb
+*.db

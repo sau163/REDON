@@ -1,0 +1,11 @@
+# Keep the build context small and the image clean.
+build/
+build_clean/
+dist/
+.git/
+*.wal
+*.db
+*.tmp
+*.zip
+# stray scratch files in the repo root only (NOT the tests/ suites the build needs)
+/test_*.cpp
