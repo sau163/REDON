@@ -38,13 +38,15 @@ phase — it is always a working program, just with more capabilities each time.
 
 ## What you get
 
-Three programs:
+Four programs:
 
 - **`redon-server`** — listens on a TCP port and stores keys, serving many
   clients at once via a thread pool (Phase 2) and persisting writes to a
   Write-Ahead Log so they survive a crash (Phase 3).
 - **`redon-cli`** — a tiny client you can type commands into (so you don't need
   `telnet` or `netcat` installed).
+- **`redon-web`** — a small HTTP gateway that serves a **browser UI** and bridges
+  it to the server, so anyone can use Redon from a web page (no terminal needed).
 - **`redon-bench`** — a concurrent load generator that opens many connections at
   once and reports throughput/latency (and verifies correctness under load).
 
@@ -74,10 +76,41 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-The two executables land in `build/` (exact path is printed at the end of the
+The executables land in `build/` (exact path is printed at the end of the
 build; on Windows with Visual Studio it is `build/Release/`).
 
-## Run it
+## Use it in your browser (easiest — no terminal)
+
+Start the server **and** the web UI with one command, then open the page:
+
+```sh
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts\run.ps1
+# Linux/macOS
+./scripts/run.sh
+```
+
+This builds (if needed), starts `redon-server` + `redon-web`, and opens
+**http://127.0.0.1:8080** — a dark-mode web terminal with an input box,
+quick-command buttons, a live output log, and a stats strip (keys, hit rate,
+uptime…) that refreshes from `INFO`. See [docs/WEB.md](docs/WEB.md).
+
+### …or with Docker (runs anywhere, nothing to install but Docker)
+
+```sh
+docker build -t redon .
+docker run --rm -p 8080:8080 -p 9090:9090 redon
+# open http://localhost:8080   (Prometheus metrics on :9090/metrics)
+```
+
+### …or hand someone a zip (no toolchain required)
+
+```sh
+powershell -ExecutionPolicy Bypass -File scripts\package.ps1
+# produces dist\redon-win64.zip — unzip anywhere, double-click start.bat
+```
+
+## Run it (from the terminal)
 
 Open **two terminals**.
 
@@ -256,8 +289,11 @@ Redon/
 │   ├── replication.h/.cpp# leader-side replication to follower nodes (Phase 5)
 │   ├── raft.h/.cpp       # Raft leader election (terms, votes, quorum) (Phase 6)
 │   ├── router.h/.cpp     # sharding: hash(key) %% N, forward to the shard (Phase 7)
+│   ├── metrics.h/.cpp    # atomic counters, INFO, Prometheus /metrics (Phase 9)
 │   ├── server.h/.cpp     # TCP server: accept clients, hand each to the pool
+│   ├── web.h/.cpp        # browser-UI HTTP gateway (bridges browser <-> server)
 │   ├── main.cpp          # entry point for redon-server
+│   ├── web_main.cpp      # entry point for redon-web
 │   └── client_main.cpp   # entry point for redon-cli
 ├── bench/
 │   └── redon_bench.cpp   # concurrent load generator (redon-bench)
@@ -274,6 +310,13 @@ Redon/
 │   ├── PHASE5.md         # how Phase 5 (replication) works, explained
 │   ├── PHASE6.md         # how Phase 6 (Raft leader election) works, explained
 │   ├── PHASE7.md         # how Phase 7 (sharding) works, explained
-│   └── PHASE8.md         # how Phase 8 (on-disk storage engine) works, explained
+│   ├── PHASE8.md         # how Phase 8 (on-disk storage engine) works, explained
+│   ├── PHASE9.md         # how Phase 9 (metrics / monitoring) works, explained
+│   └── WEB.md            # the browser UI gateway (redon-web), explained
+├── scripts/
+│   ├── run.ps1 / run.sh  # build + start server & web UI locally
+│   └── package.ps1       # build Release and zip a shareable bundle
+├── docker/entrypoint.sh  # starts server + web UI inside the container
+├── Dockerfile            # one-command containerized build & run
 └── CMakeLists.txt        # build configuration
 ```
