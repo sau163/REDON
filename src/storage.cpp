@@ -65,7 +65,9 @@ bool Storage::set(const std::string& key, const std::string& value) {
         replicator_->replicate_set(key, value);
     }
     while (!replaying_ && capacity_ > 0 && index_.size() > capacity_) {
-        evict_lru_locked(true);
+        if (!evict_lru_locked(true)) {
+            break;  // durable eviction failed; stop rather than lose the DEL
+        }
     }
     return true;
 }
@@ -150,13 +152,32 @@ void Storage::attach_replicator(Replicator* replicator) {
 
 std::vector<std::pair<std::string, std::string>> Storage::snapshot_locked(
     const std::function<void()>& while_locked) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<std::pair<std::string, std::string>> snap;
     if (disk_) {
-        snap = disk_->snapshot();  // reads every value from disk
-    } else {
-        snap.assign(items_.begin(), items_.end());
+        // Disk path: under the lock, take only the cheap index cut (offsets) AND
+        // run while_locked (which marks the follower "streaming") — the two must
+        // be atomic so no write slips between the cut and the start of streaming.
+        // Then RELEASE the lock and read the value bytes off disk, so a big
+        // (re)sync doesn't freeze every other client on the global mutex for the
+        // duration of a whole-database scan. Safe because the file is append-only:
+        // the captured offsets are immutable and read_snapshot reads through its
+        // own handle. Any write that lands after the cut is already being streamed
+        // to the follower, so it converges.
+        std::vector<std::pair<std::string, DiskStore::Entry>> idx;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            idx = disk_->snapshot_index();
+            if (while_locked) {
+                while_locked();
+            }
+        }
+        return disk_->read_snapshot(idx);  // disk I/O with NO storage lock held
     }
+
+    // In-memory path: the copy is cheap, so do it (and while_locked) under the
+    // lock. Order is most-recently-used first.
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::pair<std::string, std::string>> snap(items_.begin(),
+                                                          items_.end());
     if (while_locked) {
         while_locked();  // e.g. the replicator marks the follower "streaming"
     }
@@ -186,23 +207,25 @@ void Storage::set_replaying(bool replaying) {
     }
 }
 
-void Storage::evict_lru_locked(bool log_eviction) {
+bool Storage::evict_lru_locked(bool log_eviction) {
     // Copy the key out before pop_back destroys the node.
     const std::string evicted = items_.back().first;
-    if (log_eviction) {
-        // Keep the log AND the followers consistent with memory: record the
-        // eviction as a delete. Best-effort for the WAL — if it fails the key is
-        // still evicted to honor capacity, and the WAL marks itself unhealthy so
-        // the next client write is rejected.
-        if (wal_ != nullptr) {
-            wal_->append_del(evicted);
+    if (log_eviction && wal_ != nullptr) {
+        // Record the eviction as a delete so the log stays consistent with
+        // memory. If the durable DEL fails we must NOT drop the key: its original
+        // SET is still earlier in the log, so a replay would resurrect it with
+        // stale data. Leave it in place (capacity may be briefly exceeded — the
+        // lesser evil) and report failure so the caller stops evicting.
+        if (!wal_->append_del(evicted)) {
+            return false;
         }
-        if (replicator_ != nullptr) {
-            replicator_->replicate_del(evicted);
-        }
+    }
+    if (log_eviction && replicator_ != nullptr) {
+        replicator_->replicate_del(evicted);
     }
     index_.erase(evicted);
     items_.pop_back();
+    return true;
 }
 
 }  // namespace redon

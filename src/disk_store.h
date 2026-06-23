@@ -41,17 +41,29 @@ public:
     std::size_t size() const { return index_.size(); }
     bool clear();  // false if the file couldn't be reopened (backend now unusable)
 
-    // (key, value) for every live key — reads each value from disk. Used by
-    // replication's snapshot.
-    std::vector<std::pair<std::string, std::string>> snapshot();
-
-private:
-    // Where a key's current value lives in the data file.
+    // Where a key's current value lives in the data file. Public so a caller can
+    // hold a snapshot of offsets (see snapshot_index). Offsets are stable for the
+    // life of the file — records are append-only and compaction only runs at
+    // startup — so a captured Entry stays valid while the server is serving.
     struct Entry {
         std::streampos value_pos;
         std::size_t value_len;
     };
 
+    // (key, value) for every live key — reads each value from disk.
+    std::vector<std::pair<std::string, std::string>> snapshot();
+
+    // Two-phase snapshot for replication. snapshot_index() copies just the index
+    // (offsets only, NO disk I/O) so the caller can capture it cheaply under its
+    // lock; read_snapshot() then materializes the values from disk through a
+    // SEPARATE read handle, so it needs no lock and cannot race a concurrent
+    // writer on the main handle. Together they keep the whole-dataset disk scan
+    // off the global storage lock during a follower (re)sync.
+    std::vector<std::pair<std::string, Entry>> snapshot_index() const;
+    std::vector<std::pair<std::string, std::string>> read_snapshot(
+        const std::vector<std::pair<std::string, Entry>>& entries) const;
+
+private:
     void recover();   // rebuild the index from the file (and compact if wasteful)
     void compact();   // rewrite the file dropping superseded/deleted records
     bool read_value(const Entry& e, std::string* out);

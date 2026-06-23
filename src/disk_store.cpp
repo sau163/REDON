@@ -108,12 +108,41 @@ bool DiskStore::clear() {
 }
 
 std::vector<std::pair<std::string, std::string>> DiskStore::snapshot() {
-    std::vector<std::pair<std::string, std::string>> out;
+    return read_snapshot(snapshot_index());
+}
+
+std::vector<std::pair<std::string, DiskStore::Entry>> DiskStore::snapshot_index()
+    const {
+    std::vector<std::pair<std::string, Entry>> out;
     out.reserve(index_.size());
     for (const auto& kv : index_) {
-        std::string value;
-        if (read_value(kv.second, &value)) {
-            out.emplace_back(kv.first, std::move(value));
+        out.emplace_back(kv.first, kv.second);  // offsets only — no I/O
+    }
+    return out;
+}
+
+std::vector<std::pair<std::string, std::string>> DiskStore::read_snapshot(
+    const std::vector<std::pair<std::string, Entry>>& entries) const {
+    std::vector<std::pair<std::string, std::string>> out;
+    out.reserve(entries.size());
+    // A dedicated read handle, independent of file_: these reads hold no storage
+    // lock and so cannot race a concurrent writer on file_. Safe because the data
+    // file is append-only — every captured offset points at immutable bytes — and
+    // compaction only runs at startup, never while serving.
+    std::ifstream in(path_, std::ios::in | std::ios::binary);
+    if (!in.is_open()) {
+        return out;  // best effort: an empty snapshot
+    }
+    for (const auto& kv : entries) {
+        const Entry& e = kv.second;
+        in.clear();
+        in.seekg(e.value_pos);
+        std::string buf(e.value_len, '\0');
+        if (e.value_len > 0) {
+            in.read(&buf[0], static_cast<std::streamsize>(e.value_len));
+        }
+        if (in) {
+            out.emplace_back(kv.first, std::move(buf));
         }
     }
     return out;

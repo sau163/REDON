@@ -111,7 +111,10 @@ private:
 
     // Evict the least-recently-used key. Caller must hold mutex_ and ensure the
     // cache is non-empty. `log_eviction` controls whether a DEL is written.
-    void evict_lru_locked(bool log_eviction);
+    // Returns false WITHOUT evicting if the durable DEL failed — the caller must
+    // then stop evicting, so a key is never dropped from RAM while its original
+    // SET still lives in the log (which would resurrect it on the next replay).
+    bool evict_lru_locked(bool log_eviction);
 
     mutable std::mutex mutex_;
     std::list<Item> items_;                          // front = MRU, back = LRU
