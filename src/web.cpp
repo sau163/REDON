@@ -146,122 +146,296 @@ const char* const kIndexPage = R"PAGE(<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Redon — distributed key-value store</title>
 <style>
-  :root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#e6edf3;--muted:#8b949e;
-        --accent:#58a6ff;--ok:#3fb950;--err:#f85149;--num:#d29922}
+  :root{--bg:#0a0c10;--panel:#11151c;--panel2:#161c26;--border:#222a36;--fg:#e8eef6;
+        --muted:#8b95a7;--soft:#5b6473;--red:#ff4438;--red2:#c9302c;--ok:#3fb950;
+        --amber:#e3b341;--blue:#58a6ff;--radius:13px}
   *{box-sizing:border-box}
-  body{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-       background:var(--bg);color:var(--fg)}
-  header{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;
-         align-items:center;gap:14px;flex-wrap:wrap}
-  .logo{font-size:22px;font-weight:700;letter-spacing:.5px}
-  .logo span{color:var(--accent)}
-  .tag{color:var(--muted);font-size:13px}
-  .status{margin-left:auto;font-size:13px;color:var(--muted)}
-  .dot{width:10px;height:10px;border-radius:50%;background:var(--err);
-       display:inline-block;margin-right:6px;vertical-align:middle}
-  .dot.up{background:var(--ok)}
-  main{max-width:900px;margin:0 auto;padding:22px}
-  .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
-  .stat{background:var(--panel);border:1px solid var(--border);border-radius:8px;
-        padding:8px 12px;font-size:12px;min-width:92px;color:var(--muted)}
-  .stat b{display:block;font-size:16px;color:var(--fg);margin-top:2px}
-  #out{background:#010409;border:1px solid var(--border);border-radius:10px;
-       padding:14px;height:340px;overflow:auto;font-size:13px;line-height:1.55;
-       white-space:pre-wrap;word-break:break-word}
-  .line{margin:2px 0}
-  .cmd{color:var(--accent)} .ok{color:var(--ok)} .err{color:var(--err)}
-  .num{color:var(--num)} .muted{color:var(--muted)}
-  form{display:flex;gap:8px;margin-top:12px}
-  input[type=text]{flex:1;background:var(--panel);border:1px solid var(--border);
-       color:var(--fg);border-radius:8px;padding:11px 13px;font:inherit}
-  input[type=text]:focus{outline:none;border-color:var(--accent)}
-  button{background:var(--accent);color:#0d1117;border:0;border-radius:8px;
-         padding:0 18px;font:inherit;font-weight:700;cursor:pointer}
-  button:hover{opacity:.9}
-  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-  .chip{background:var(--panel);border:1px solid var(--border);color:var(--muted);
-        border-radius:20px;padding:6px 12px;font-size:12px;cursor:pointer}
-  .chip:hover{border-color:var(--accent);color:var(--fg)}
-  details{margin-top:20px;color:var(--muted);font-size:13px}
-  code{background:var(--panel);padding:1px 5px;border-radius:4px;color:var(--fg)}
-  footer{text-align:center;color:var(--muted);font-size:12px;padding:20px}
+  html,body{height:100%}
+  body{margin:0;color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:radial-gradient(1100px 560px at 82% -12%,rgba(255,68,56,.10),transparent 60%),var(--bg)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .app{display:flex;min-height:100vh}
+  /* sidebar */
+  .sidebar{width:252px;flex:none;border-right:1px solid var(--border);display:flex;
+    flex-direction:column;gap:18px;padding:18px 16px;background:linear-gradient(180deg,#0c1017,#0a0c10)}
+  .brand{display:flex;align-items:center;gap:12px}
+  .brand .mark{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;
+    font-weight:800;font-size:21px;color:#fff;background:linear-gradient(135deg,var(--red),var(--red2));
+    box-shadow:0 8px 20px rgba(255,68,56,.35)}
+  .brand .name{font-size:19px;font-weight:800;letter-spacing:.3px}
+  .brand .name span{color:var(--red)}
+  .brand .sub{font-size:11px;color:var(--soft);margin-top:2px}
+  .conn{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:11px 12px}
+  .conn .row{display:flex;align-items:center;gap:9px;font-size:12px}
+  .conn .addr{color:var(--soft);margin-top:7px;font-size:11px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--red);box-shadow:0 0 0 3px rgba(255,68,56,.16)}
+  .dot.up{background:var(--ok);box-shadow:0 0 0 3px rgba(63,185,80,.16)}
+  .nav{display:flex;flex-direction:column;gap:4px}
+  .nav .item{padding:9px 12px;border-radius:9px;color:var(--muted);font-size:13px;font-weight:600}
+  .nav .item.active{background:rgba(255,68,56,.12);color:#fff;border:1px solid rgba(255,68,56,.28)}
+  .keys{flex:1;display:flex;flex-direction:column;min-height:0}
+  .keys h4{margin:0 0 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--soft)}
+  .keylist{overflow:auto;display:flex;flex-direction:column;gap:5px}
+  .keyrow{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:7px 10px;cursor:pointer}
+  .keyrow:hover{border-color:rgba(255,68,56,.45)}
+  .keyrow .k{font-size:12px;font-weight:700;word-break:break-all}
+  .keyrow .v{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .keys .empty{color:var(--soft);font-size:12px}
+  .sidefoot{font-size:11px;color:var(--soft);border-top:1px solid var(--border);padding-top:12px;line-height:1.5}
+  /* content */
+  .content{flex:1;min-width:0;display:flex;flex-direction:column;gap:16px;padding:22px 26px}
+  .topbar{display:flex;align-items:center;gap:14px}
+  .topbar h1{margin:0;font-size:20px;font-weight:700}
+  .topbar .meta{color:var(--soft);font-size:12px}
+  .pill{margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--panel);
+    border:1px solid var(--border);border-radius:999px;padding:7px 13px;font-size:12px;color:var(--muted)}
+  .cards{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+  .card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--border);
+    border-radius:var(--radius);padding:13px 14px}
+  .card .label{font-size:10.5px;color:var(--soft);letter-spacing:.05em;text-transform:uppercase}
+  .card .val{font-size:25px;font-weight:800;margin-top:6px;font-variant-numeric:tabular-nums;line-height:1}
+  .card .val small{font-size:13px;color:var(--muted);font-weight:600;margin-left:2px}
+  .chartcard{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--border);
+    border-radius:var(--radius);padding:13px 16px}
+  .chartcard .hd{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+  .chartcard .hd b{font-size:13px}.chartcard .hd span{font-size:11px;color:var(--soft)}
+  #spark{width:100%;height:64px;display:block}
+  /* workbench */
+  .wb{flex:1;display:flex;flex-direction:column;min-height:300px;overflow:hidden;
+    background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--border);border-radius:var(--radius)}
+  .wb .hd{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)}
+  .wb .hd b{font-size:13px}.wb .hd .hint{color:var(--soft);font-size:12px}
+  .wb .hd .clear{margin-left:auto;font-size:12px;color:var(--muted);cursor:pointer;
+    border:1px solid var(--border);border-radius:7px;padding:5px 11px;background:var(--panel)}
+  .wb .hd .clear:hover{color:#fff;border-color:var(--red)}
+  #console{flex:1;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:11px}
+  .entry .q{font-size:13px}
+  .entry .q .prompt{color:var(--red);font-weight:800;margin-right:7px;font-family:ui-monospace,Consolas,monospace}
+  .entry .q .ts{float:right;color:var(--soft);font-size:11px}
+  .entry .a{margin-top:6px}
+  .badge{display:inline-block;border-radius:6px;padding:3px 10px;font-size:12px;font-weight:700;
+    font-family:ui-monospace,Consolas,monospace}
+  .badge.ok{background:rgba(63,185,80,.16);color:var(--ok)}
+  .badge.err{background:rgba(255,68,56,.16);color:var(--red)}
+  .badge.num{background:rgba(227,179,65,.16);color:var(--amber)}
+  .badge.nil{background:rgba(139,149,167,.16);color:var(--muted)}
+  .value{background:#070a0e;border:1px solid var(--border);border-radius:8px;padding:9px 11px;
+    font-family:ui-monospace,Consolas,monospace;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#d7e2f0}
+  .inforow{display:flex;flex-wrap:wrap;gap:6px}
+  .kv{background:#070a0e;border:1px solid var(--border);border-radius:7px;padding:4px 9px;font-size:11px;
+    font-family:ui-monospace,Consolas,monospace;color:var(--muted)}
+  .kv b{color:#fff;font-weight:700}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;padding:0 16px 12px}
+  .chip{background:var(--panel);border:1px solid var(--border);color:var(--muted);border-radius:999px;
+    padding:6px 12px;font-size:12px;cursor:pointer}
+  .chip:hover{border-color:var(--red);color:#fff}
+  .cmdbar{display:flex;gap:9px;padding:12px 16px;border-top:1px solid var(--border)}
+  .cmdbar .prompt{display:flex;align-items:center;color:var(--red);font-weight:800;
+    font-family:ui-monospace,Consolas,monospace}
+  #cmd{flex:1;background:#070a0e;border:1px solid var(--border);color:var(--fg);border-radius:9px;
+    padding:11px 13px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+  #cmd:focus{outline:none;border-color:var(--red)}
+  .run{background:linear-gradient(135deg,var(--red),var(--red2));color:#fff;border:0;border-radius:9px;
+    padding:0 22px;font-weight:700;cursor:pointer}
+  .run:hover{filter:brightness(1.08)}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#283142;border-radius:9px}
+  @media(max-width:860px){
+    .app{flex-direction:column}
+    .sidebar{width:auto;flex-direction:row;flex-wrap:wrap;align-items:center}
+    .keys,.nav{display:none}.cards{grid-template-columns:repeat(3,1fr)}
+  }
 </style>
 </head>
 <body>
-<header>
-  <div class="logo">Re<span>don</span></div>
-  <div class="tag">a distributed key-value store, built from scratch in C++</div>
-  <div class="status"><span id="dot" class="dot"></span><span id="statusText">connecting…</span></div>
-</header>
-<main>
-  <div class="stats" id="stats"></div>
-  <div id="out"></div>
-  <form id="form" autocomplete="off">
-    <input id="cmd" type="text" placeholder="type a command, e.g.  SET name Saurabh" autofocus>
-    <button type="submit">Run</button>
-  </form>
-  <div class="chips" id="chips"></div>
-  <details>
-    <summary>Commands &amp; how this works</summary>
-    <p><code>SET key value</code> · <code>GET key</code> · <code>DEL key</code> ·
-       <code>EXISTS key</code> · <code>PING</code> · <code>INFO</code></p>
-    <p>Each command is sent as one TCP line to the Redon server and returns one
-       reply line. This page is served by <code>redon-web</code>, a small gateway
-       that bridges your browser to the Redon TCP server.</p>
-  </details>
-</main>
-<footer>Redon · a 9-phase distributed key-value store</footer>
-<script>
-const out=document.getElementById('out');
-function append(text,cls){const d=document.createElement('div');
-  d.className='line '+(cls||'');d.textContent=text;out.appendChild(d);
-  out.scrollTop=out.scrollHeight;}
-function classify(r){
-  if(r==='OK'||r==='PONG')return 'ok';
-  if(r.startsWith('ERR'))return 'err';
-  if(r==='(nil)')return 'muted';
-  if(r.startsWith('(integer)'))return 'num';
-  return '';}
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">R</div>
+      <div><div class="name">Re<span>don</span></div><div class="sub">distributed KV store · C++</div></div>
+    </div>
+    <div class="conn">
+      <div class="row"><span id="dot" class="dot"></span><span id="connText">connecting…</span></div>
+      <div class="addr">browser → redon-web → server</div>
+    </div>
+    <div class="nav">
+      <div class="item active">Workbench</div>
+      <div class="item">Live metrics</div>
+    </div>
+    <div class="keys">
+      <h4>Keys · this session</h4>
+      <div class="keylist" id="keylist"><div class="empty">No keys yet — run a SET.</div></div>
+    </div>
+    <div class="sidefoot">A 9-phase distributed key-value store,<br>built from scratch. Redis-inspired.</div>
+  </aside>
+  <main class="content">
+    <div class="topbar">
+      <h1>Workbench</h1>
+      <span class="meta">browser console for Redon</span>
+      <div class="pill"><span id="dot2" class="dot"></span><span id="pillText">connecting…</span></div>
+    </div>
+    <div class="cards" id="cards"></div>
+    <div class="chartcard">
+      <div class="hd"><b>Throughput</b><span>operations / sec, live</span>
+        <span id="opsNow" style="margin-left:auto;color:var(--fg);font-weight:700"></span></div>
+      <canvas id="spark"></canvas>
+    </div>
+    <div class="wb">
+      <div class="hd"><b>CLI</b><span class="hint">— type a command, ↑/↓ for history</span>
+        <span class="clear" id="clearBtn">Clear</span></div>
+      <div id="console"></div>
+      <div class="chips" id="chips"></div>
+      <form id="form" class="cmdbar" autocomplete="off">
+        <span class="prompt">redon&gt;</span>
+        <input id="cmd" class="mono" type="text" placeholder="SET user:1 Saurabh" autofocus>
+        <button class="run" type="submit">Run</button>
+      </form>
+    </div>
+  </main>
+</div>
+)PAGE"
+// (split here only because MSVC caps a single string literal at ~16 KB; adjacent
+// string literals are concatenated by the compiler into one page.)
+R"PAGE(<script>
+const $=id=>document.getElementById(id);
+const consoleEl=$('console'),keylist=$('keylist'),cardsEl=$('cards');
+const dot=$('dot'),dot2=$('dot2'),connText=$('connText'),pillText=$('pillText');
+const keys=new Map();
+const hist=[];let hpos=-1;
+
+function nowts(){return new Date().toTimeString().slice(0,8);}
+function badge(reply){
+  if(reply==='OK'||reply==='PONG')return ['ok',reply];
+  if(reply.indexOf('ERR')===0)return ['err',reply];
+  if(reply==='(nil)')return ['nil','(nil)'];
+  if(reply.indexOf('(integer)')===0)return ['num',reply];
+  return [null,reply];
+}
+function renderInfo(line){
+  const wrap=document.createElement('div');wrap.className='inforow';
+  line.split(' ').forEach(kv=>{const i=kv.indexOf('=');if(i<0)return;
+    const d=document.createElement('span');d.className='kv';
+    d.appendChild(document.createTextNode(kv.slice(0,i)+' '));
+    const b=document.createElement('b');b.textContent=kv.slice(i+1);d.appendChild(b);
+    wrap.appendChild(d);});
+  return wrap;
+}
+function addEntry(cmd,reply,ok){
+  const e=document.createElement('div');e.className='entry';
+  const q=document.createElement('div');q.className='q';
+  const p=document.createElement('span');p.className='prompt';p.textContent='redon>';
+  const c=document.createElement('span');c.textContent=cmd;
+  const ts=document.createElement('span');ts.className='ts';ts.textContent=nowts();
+  q.appendChild(p);q.appendChild(c);q.appendChild(ts);
+  const a=document.createElement('div');a.className='a';
+  if(!ok){const b=document.createElement('span');b.className='badge err';b.textContent='✗ '+reply;a.appendChild(b);}
+  else if(reply.indexOf('uptime_s=')===0){a.appendChild(renderInfo(reply));}
+  else{const r=badge(reply);
+    if(r[0]){const b=document.createElement('span');b.className='badge '+r[0];b.textContent=r[1];a.appendChild(b);}
+    else{const v=document.createElement('div');v.className='value';v.textContent=r[1];a.appendChild(v);}}
+  e.appendChild(q);e.appendChild(a);consoleEl.appendChild(e);
+  consoleEl.scrollTop=consoleEl.scrollHeight;
+}
+function trackKey(cmd,reply){
+  const t=cmd.trim().split(/\s+/);const verb=(t[0]||'').toUpperCase();const k=t[1];
+  if(!k)return;
+  if(verb==='SET'&&reply==='OK')keys.set(k,t.slice(2).join(' '));
+  else if(verb==='GET'&&reply!=='(nil)'&&reply.indexOf('ERR')!==0)keys.set(k,reply);
+  else if((verb==='DEL'||verb==='DELETE')&&reply.indexOf('1')>=0)keys.delete(k);
+  renderKeys();
+}
+function renderKeys(){
+  keylist.innerHTML='';
+  if(keys.size===0){const d=document.createElement('div');d.className='empty';
+    d.textContent='No keys yet — run a SET.';keylist.appendChild(d);return;}
+  [...keys.keys()].sort().forEach(k=>{
+    const r=document.createElement('div');r.className='keyrow';
+    const kk=document.createElement('div');kk.className='k';kk.textContent=k;
+    const vv=document.createElement('div');vv.className='v';vv.textContent=keys.get(k);
+    r.appendChild(kk);r.appendChild(vv);r.onclick=()=>run('GET '+k);keylist.appendChild(r);});
+}
+async function api(cmd){const r=await fetch('/cmd',{method:'POST',body:cmd});return r.json();}
 async function run(cmd){
   cmd=(cmd||'').trim();if(!cmd)return;
-  append('> '+cmd,'cmd');
-  try{
-    const r=await fetch('/cmd',{method:'POST',body:cmd});
-    const j=await r.json();
-    if(j.ok)append(j.reply,classify(j.reply));
-    else append('✗ '+(j.error||'error'),'err');
-  }catch(e){append('✗ network error','err');}
-  refreshStats();}
-document.getElementById('form').addEventListener('submit',e=>{
-  e.preventDefault();const i=document.getElementById('cmd');run(i.value);i.value='';});
-const chips=[['PING','PING'],
-  ['SET demo','SET demo:greeting hello from the browser'],
-  ['GET demo','GET demo:greeting'],
-  ['EXISTS demo','EXISTS demo:greeting'],
-  ['DEL demo','DEL demo:greeting'],
-  ['INFO','INFO']];
-const chipBox=document.getElementById('chips');
+  hist.push(cmd);hpos=hist.length;
+  try{const j=await api(cmd);
+    if(j.ok){addEntry(cmd,j.reply,true);trackKey(cmd,j.reply);}
+    else addEntry(cmd,j.error||'error',false);
+  }catch(e){addEntry(cmd,'network error',false);}
+  pollStats();
+}
+$('form').addEventListener('submit',e=>{e.preventDefault();const i=$('cmd');run(i.value);i.value='';});
+$('cmd').addEventListener('keydown',e=>{
+  if(e.key==='ArrowUp'){if(hpos>0){hpos--;$('cmd').value=hist[hpos];e.preventDefault();}}
+  else if(e.key==='ArrowDown'){if(hpos<hist.length-1){hpos++;$('cmd').value=hist[hpos];}
+    else{hpos=hist.length;$('cmd').value='';}}
+});
+$('clearBtn').onclick=()=>{consoleEl.innerHTML='';};
+const chips=[['PING','PING'],['SET','SET user:1 Saurabh'],['GET','GET user:1'],
+  ['EXISTS','EXISTS user:1'],['DEL','DEL user:1'],['INFO','INFO']];
+const chipBox=$('chips');
 chips.forEach(c=>{const b=document.createElement('span');b.className='chip';
-  b.textContent=c[0];b.onclick=()=>run(c[1]);chipBox.appendChild(b);});
-const dot=document.getElementById('dot'),statusText=document.getElementById('statusText'),
-      stats=document.getElementById('stats');
-function showStats(info){
-  const p={};info.split(' ').forEach(kv=>{const i=kv.indexOf('=');
-    if(i>0)p[kv.slice(0,i)]=kv.slice(i+1);});
-  const want=[['keys','keys'],['commands','commands'],['hit_rate','hit rate'],
-              ['clients','clients'],['uptime_s','uptime (s)']];
-  stats.innerHTML='';
-  want.forEach(w=>{if(p[w[0]]!==undefined){const d=document.createElement('div');
-    d.className='stat';d.innerHTML=w[1]+'<b>'+p[w[0]]+'</b>';stats.appendChild(d);}});}
-async function refreshStats(){
-  try{
-    const r=await fetch('/cmd',{method:'POST',body:'INFO'});const j=await r.json();
+  b.textContent=c[0];b.title=c[1];b.onclick=()=>run(c[1]);chipBox.appendChild(b);});
+
+const CARDS=[['keys','Keys'],['commands','Commands'],['ops','Ops/sec'],
+  ['hit_rate','Hit rate'],['clients','Clients'],['uptime_s','Uptime']];
+function fmtUptime(s){s=+s;if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';
+  return Math.floor(s/3600)+'h';}
+function renderCards(p,ops){
+  cardsEl.innerHTML='';
+  CARDS.forEach(c=>{
+    let v='—',small='';
+    if(c[0]==='ops'){if(ops!=null)v=Math.round(ops).toString();}
+    else if(c[0]==='hit_rate'){if(p.hit_rate!=null){v=(parseFloat(p.hit_rate)*100).toFixed(0);small='%';}}
+    else if(c[0]==='uptime_s'){if(p.uptime_s!=null)v=fmtUptime(p.uptime_s);}
+    else{if(p[c[0]]!=null)v=p[c[0]];}
+    const d=document.createElement('div');d.className='card';
+    const lab=document.createElement('div');lab.className='label';lab.textContent=c[1];
+    const val=document.createElement('div');val.className='val';val.textContent=v;
+    if(small){const sm=document.createElement('small');sm.textContent=small;val.appendChild(sm);}
+    d.appendChild(lab);d.appendChild(val);cardsEl.appendChild(d);
+  });
+}
+const spark=$('spark'),sctx=spark.getContext('2d'),samples=[],MAX=80;
+function drawSpark(){
+  const dpr=window.devicePixelRatio||1,w=spark.clientWidth,h=spark.clientHeight;
+  spark.width=w*dpr;spark.height=h*dpr;sctx.setTransform(dpr,0,0,dpr,0,0);sctx.clearRect(0,0,w,h);
+  if(samples.length<2)return;
+  const mx=Math.max(1,...samples),n=samples.length;
+  const X=i=>i/(MAX-1)*w,Y=v=>h-4-(v/mx)*(h-10);
+  const g=sctx.createLinearGradient(0,0,0,h);
+  g.addColorStop(0,'rgba(255,68,56,.35)');g.addColorStop(1,'rgba(255,68,56,0)');
+  sctx.beginPath();sctx.moveTo(X(0),Y(samples[0]));
+  for(let i=1;i<n;i++)sctx.lineTo(X(i),Y(samples[i]));
+  sctx.lineTo(X(n-1),h);sctx.lineTo(X(0),h);sctx.closePath();sctx.fillStyle=g;sctx.fill();
+  sctx.beginPath();sctx.moveTo(X(0),Y(samples[0]));
+  for(let i=1;i<n;i++)sctx.lineTo(X(i),Y(samples[i]));
+  sctx.strokeStyle='#ff4438';sctx.lineWidth=2;sctx.stroke();
+}
+window.addEventListener('resize',drawSpark);
+
+let lastCmds=null,lastT=null;
+function setConn(up,text){dot.className='dot'+(up?' up':'');dot2.className='dot'+(up?' up':'');
+  connText.textContent=text;pillText.textContent=text;}
+async function pollStats(){
+  try{const j=await api('INFO');
     if(j.ok&&j.reply.indexOf('uptime_s=')>=0){
-      showStats(j.reply);dot.className='dot up';statusText.textContent='connected to Redon';}
-    else{dot.className='dot';statusText.textContent='Redon unreachable';}
-  }catch(e){dot.className='dot';statusText.textContent='gateway down';}}
-append('Welcome to Redon. Type a command below or click a chip to begin.','muted');
-refreshStats();setInterval(refreshStats,3000);
+      const p={};j.reply.split(' ').forEach(kv=>{const i=kv.indexOf('=');if(i>0)p[kv.slice(0,i)]=kv.slice(i+1);});
+      const t=Date.now();let ops=null;
+      if(lastCmds!=null&&lastT!=null){const dt=(t-lastT)/1000;if(dt>0)ops=Math.max(0,(+p.commands-lastCmds)/dt);}
+      lastCmds=+p.commands;lastT=t;
+      if(ops!=null){samples.push(ops);if(samples.length>MAX)samples.shift();drawSpark();
+        $('opsNow').textContent=Math.round(ops)+' ops/s';}
+      renderCards(p,ops);setConn(true,'connected to Redon');
+    }else setConn(false,'Redon unreachable');
+  }catch(e){setConn(false,'gateway down');}
+}
+const intro=document.createElement('div');intro.className='entry';
+const iv=document.createElement('div');iv.className='value';
+iv.textContent='Welcome to Redon. Type a command or click a chip below. Try: SET user:1 Saurabh';
+intro.appendChild(iv);consoleEl.appendChild(intro);
+renderCards({},null);drawSpark();pollStats();setInterval(pollStats,1500);
 </script>
 </body>
 </html>
