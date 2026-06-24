@@ -117,6 +117,7 @@ void verb_and_key(const std::string& line, std::string* verb, std::string* key) 
         static_cast<unsigned char>(line[i + 1]) == 0xBB &&
         static_cast<unsigned char>(line[i + 2]) == 0xBF) {
         i += 3;
+        skip_ws();  // a BOM may be followed by whitespace; match command.cpp
     }
     *verb = token();
     skip_ws();
@@ -354,9 +355,14 @@ int Server::run() {
             }
             // Keepalive detects a peer that silently vanishes; the recv timeout
             // disconnects a client that just sits there sending nothing, so it
-            // can't hold a worker hostage.
+            // can't hold a worker hostage. The SEND timeout is the mirror image:
+            // a client that stops *reading* would otherwise fill the kernel send
+            // buffer and block the worker forever inside ::send (a slow-loris on
+            // the write side). With it set, send_all() fails and the connection
+            // is closed instead of pinning a worker.
             net::set_keepalive(client);
             net::set_recv_timeout(client, config_.idle_timeout_seconds);
+            net::set_send_timeout(client, config_.idle_timeout_seconds);
 
             // Owns the socket until we successfully hand it to the pool; closes
             // it if submission fails (overloaded) or throws.
@@ -447,6 +453,7 @@ void Server::handle_client(net::socket_t client) {
 
             const bool was_replica_link = is_replica_link;
             bool should_close = false;
+            bool get_hit = false;  // set by execute_line for a direct GET
             const auto t0 = std::chrono::steady_clock::now();
             std::string reply;
             if (verb == "INFO") {
@@ -456,7 +463,7 @@ void Server::handle_client(net::socket_t client) {
             } else {
                 reply = execute_line(line, store_, &should_close,
                                      config_.is_follower, &is_replica_link,
-                                     raft_.get());
+                                     raft_.get(), &get_hit);
             }
             const auto t1 = std::chrono::steady_clock::now();
 
@@ -472,8 +479,13 @@ void Server::handle_client(net::socket_t client) {
                 if (verb == "GET" && !err) {
                     // Only a *successful* GET is a keyspace hit/miss; a GET that
                     // errored (e.g. wrong arg count) never touched the keyspace,
-                    // so it must not be counted as a miss.
-                    metrics_.on_get(reply != "(nil)");
+                    // so it must not be counted as a miss. For a direct GET use
+                    // the real lookup result (get_hit) — a stored value that is
+                    // literally "(nil)" is a hit, not a miss. A router can't know
+                    // the shard's result, so there it falls back to the reply.
+                    const bool hit =
+                        router_ != nullptr ? (reply != "(nil)") : get_hit;
+                    metrics_.on_get(hit);
                 }
             }
 

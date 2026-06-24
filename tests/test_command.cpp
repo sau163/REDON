@@ -65,6 +65,35 @@ void test_leading_utf8_bom_is_tolerated() {
     CHECK_EQ(run(s, "GET k"), std::string("v"));
 }
 
+void test_bom_followed_by_whitespace() {
+    Storage s;
+    // A BOM directly followed by a space (some editors emit this) must still
+    // parse: the parser skips the BOM AND the whitespace after it, so the verb
+    // isn't read as empty. Regression for the audit's BOM-then-space finding.
+    CHECK_EQ(run(s, "\xEF\xBB\xBF" " SET k v"), std::string("OK"));
+    CHECK_EQ(run(s, "GET k"), std::string("v"));
+}
+
+void test_get_hit_reports_true_even_for_nil_value() {
+    Storage s;
+    // A value can legitimately be the literal text "(nil)". A GET that returns it
+    // is a real HIT, not a miss — was_get_hit must distinguish them so metrics
+    // don't miscount. Regression for the audit's '(nil)'-value finding.
+    bool closed = false;
+    CHECK_EQ(execute_line("SET k (nil)", s, &closed), std::string("OK"));
+
+    bool hit = false;
+    CHECK_EQ(execute_line("GET k", s, &closed, false, nullptr, nullptr, &hit),
+             std::string("(nil)"));
+    CHECK(hit);  // found the key, despite the value being "(nil)"
+
+    hit = true;
+    CHECK_EQ(execute_line("GET missing", s, &closed, false, nullptr, nullptr,
+                          &hit),
+             std::string("(nil)"));
+    CHECK(!hit);  // genuine miss
+}
+
 void test_ping_and_quit() {
     Storage s;
     CHECK_EQ(run(s, "PING"), std::string("PONG"));
@@ -158,6 +187,8 @@ int main() {
     RUN(test_crlf_is_tolerated);
     RUN(test_extra_whitespace_is_tolerated);
     RUN(test_leading_utf8_bom_is_tolerated);
+    RUN(test_bom_followed_by_whitespace);
+    RUN(test_get_hit_reports_true_even_for_nil_value);
     RUN(test_ping_and_quit);
     RUN(test_no_arg_commands_reject_extra_args);
     RUN(test_argument_and_unknown_errors);

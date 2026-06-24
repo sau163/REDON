@@ -49,6 +49,11 @@ std::string trim(const std::string& s) {
         static_cast<unsigned char>(s[begin + 1]) == 0xBB &&
         static_cast<unsigned char>(s[begin + 2]) == 0xBF) {
         begin += 3;
+        // A BOM may be followed by whitespace (e.g. "\xEF\xBB\xBF SET ..." from
+        // an editor). Re-skip it, or the verb token would be read as empty.
+        while (begin < end && is_space(static_cast<unsigned char>(s[begin]))) {
+            ++begin;
+        }
     }
     while (end > begin && is_space(static_cast<unsigned char>(s[end - 1]))) {
         --end;
@@ -89,7 +94,8 @@ std::string wrong_args(const std::string& verb_lower) {
 
 std::string execute_line(const std::string& line, Storage& store,
                          bool* should_close, bool node_is_follower,
-                         bool* is_replica_link, RaftNode* raft) {
+                         bool* is_replica_link, RaftNode* raft,
+                         bool* was_get_hit) {
     *should_close = false;
 
     const std::string s = trim(line);
@@ -184,7 +190,13 @@ std::string execute_line(const std::string& line, Storage& store,
         }
         std::string value;
         if (store.get(key, &value)) {
+            if (was_get_hit != nullptr) {
+                *was_get_hit = true;  // real hit, even if the value is "(nil)"
+            }
             return value;
+        }
+        if (was_get_hit != nullptr) {
+            *was_get_hit = false;  // genuine keyspace miss
         }
         return "(nil)";
     }

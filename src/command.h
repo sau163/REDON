@@ -32,10 +32,15 @@ class RaftNode;  // forward declaration; command.cpp includes raft.h
 //   `raft` — if non-null, this node is in a Raft cluster: inter-node RPCs are
 //       dispatched to it, the ROLE command reports its status, and client writes
 //       are accepted only when this node is the elected leader.
+// Metrics parameter (Phase 9):
+//   `was_get_hit` — if non-null, set true when a GET found its key and false when
+//       it did not. This lets the caller record hit/miss from the real lookup
+//       result instead of inferring it from the reply text — a value that is
+//       literally "(nil)" is a hit, not a miss, and can't be told apart by string.
 std::string execute_line(const std::string& line, Storage& store,
                          bool* should_close, bool node_is_follower = false,
                          bool* is_replica_link = nullptr,
-                         RaftNode* raft = nullptr);
+                         RaftNode* raft = nullptr, bool* was_get_hit = nullptr);
 
 }  // namespace redon
 
