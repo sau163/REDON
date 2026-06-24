@@ -231,6 +231,15 @@ int main(int argc, char** argv) {
                      "(a router stores no data)\n";
         return 1;
     }
+    if (config.metrics_port != 0 &&
+        static_cast<std::uint16_t>(config.metrics_port) == config.port) {
+        // The metrics HTTP server binds before the main data port; if they
+        // match, the data-port bind would fail later with a confusing
+        // "address already in use". Reject the collision up front instead.
+        std::cerr << "error: --metrics-port must differ from the data port ("
+                  << config.port << ")\n";
+        return 1;
+    }
 
     // Start the sockets library for the lifetime of the program (Windows needs
     // this; on POSIX it is a no-op).
