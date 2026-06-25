@@ -11,16 +11,30 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root = Split-Path -Parent $PSScriptRoot
-$exe  = Join-Path $root "build\Release\redon-server.exe"
-$web  = Join-Path $root "build\Release\redon-web.exe"
+$root  = Split-Path -Parent $PSScriptRoot
+$build = Join-Path $root "build"
 
-if (-not $NoBuild -or -not (Test-Path $exe) -or -not (Test-Path $web)) {
-    Write-Host "Building Redon (Release)..." -ForegroundColor Cyan
-    cmake -S $root -B (Join-Path $root "build") | Out-Null
-    cmake --build (Join-Path $root "build") --config Release
-    if ($LASTEXITCODE -ne 0) { throw "build failed" }
+# Multi-config generators (Visual Studio) put the exe in build\Release\; single-
+# config ones (Ninja, MinGW Makefiles) put it directly in build\. Look in both.
+function Find-Exe($name) {
+    foreach ($p in @((Join-Path $build "Release\$name"), (Join-Path $build $name))) {
+        if (Test-Path $p) { return $p }
+    }
+    return $null
 }
+
+$exe = Find-Exe "redon-server.exe"
+$web = Find-Exe "redon-web.exe"
+
+if (-not $NoBuild -or -not $exe -or -not $web) {
+    Write-Host "Building Redon (Release)..." -ForegroundColor Cyan
+    cmake -S $root -B $build | Out-Null
+    cmake --build $build --config Release
+    if ($LASTEXITCODE -ne 0) { throw "build failed" }
+    $exe = Find-Exe "redon-server.exe"
+    $web = Find-Exe "redon-web.exe"
+}
+if (-not $exe -or -not $web) { throw "could not find redon-server / redon-web under $build" }
 
 Write-Host "Starting redon-server on 127.0.0.1:$RedonPort (wal=$Wal, metrics :9090)..." -ForegroundColor Cyan
 $server = Start-Process -FilePath $exe `

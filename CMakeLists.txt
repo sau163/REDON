@@ -1,6 +1,7 @@
 # CMakeLists.txt — build configuration for Redon.
 #
-# Produces two executables (redon-server, redon-cli) plus two test programs.
+# Produces four executables (redon-server, redon-cli, redon-web, redon-bench)
+# plus eight test programs.
 # Works with Visual Studio 2022 on Windows and GCC/Clang on Linux/macOS.
 #
 #   cmake -S . -B build
