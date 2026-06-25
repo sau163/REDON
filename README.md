@@ -1,5 +1,7 @@
 # Redon
 
+[![CI](https://github.com/sau163/REDON/actions/workflows/ci.yml/badge.svg)](https://github.com/sau163/REDON/actions/workflows/ci.yml)
+
 A distributed key-value store I wrote from scratch in C++. No database, no
 networking framework, no third-party libraries — just the standard library and raw
 sockets.
@@ -333,5 +335,5 @@ point of failure.
 
 I'm Saurabh. I built Redon to actually understand how distributed databases work
 instead of just reading about them — the [phase docs](docs/) walk through each piece
-in order. Reach me on GitHub (`https://github.com/<your-username>`) or LinkedIn
-(`https://linkedin.com/in/<your-handle>`).
+in order. Reach me on [GitHub](https://github.com/sau163) — and add your LinkedIn
+here too (`https://linkedin.com/in/<your-handle>`).
