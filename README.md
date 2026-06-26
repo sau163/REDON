@@ -335,5 +335,5 @@ point of failure.
 
 I'm Saurabh. I built Redon to actually understand how distributed databases work
 instead of just reading about them — the [phase docs](docs/) walk through each piece
-in order. Reach me on [GitHub](https://github.com/sau163) — and add your LinkedIn
-here too (`https://linkedin.com/in/<your-handle>`).
+in order. Reach me on [GitHub](https://github.com/sau163) or
+[LinkedIn](https://www.linkedin.com/in/saurabh-raj-19555a1a5).
