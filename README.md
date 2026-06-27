@@ -106,11 +106,21 @@ my machine" and something you'd actually trust.
 
 ## Get it running
 
-> Options 1 and 4 (and building the zip yourself) compile from source, so they need
-> **CMake 3.15+** and a **C++17 compiler** (Visual Studio 2022, or GCC/Clang) on
-> your PATH. Running a prebuilt zip or the Docker image needs neither.
+**Fastest — one command, no compiler, no clone (just Docker).** This is the
+closest thing to `docker run redis`:
 
-**1. The browser UI, one command.** Builds if needed, starts the server and the web
+```sh
+docker run --rm -p 6380:6380 -p 8080:8080 -p 9090:9090 ghcr.io/sau163/redon
+```
+
+That starts the server (CLI on `6380`), the browser dashboard at
+**http://localhost:8080**, and Prometheus metrics on `9090`. CI publishes the image
+to GHCR on every push, so it's always current.
+
+Everything below builds from source instead, which needs **CMake 3.15+** and a
+**C++17 compiler** (Visual Studio 2022, or GCC/Clang) on your PATH.
+
+**The browser UI in one command** — builds if needed, starts the server and web
 gateway, and opens the dashboard:
 
 ```sh
@@ -118,23 +128,17 @@ powershell -ExecutionPolicy Bypass -File scripts\run.ps1   # Windows
 ./scripts/run.sh                                            # Linux/macOS
 ```
 
-Then open **http://127.0.0.1:8080**. Press Ctrl-C in that window to stop both.
-There's more on the gateway in [docs/WEB.md](docs/WEB.md).
+Then open **http://127.0.0.1:8080**; Ctrl-C stops both. More on the gateway in
+[docs/WEB.md](docs/WEB.md).
 
-**2. Docker** (the only path that needs no compiler — just the Docker daemon
-running). Pull the prebuilt image, or build it yourself:
+**Build the Docker image yourself** instead of pulling it:
 
 ```sh
-# prebuilt (published to GHCR by CI on every release):
-docker run --rm -p 8080:8080 -p 6380:6380 -p 9090:9090 ghcr.io/sau163/redon
-
-# or build locally:
 docker build -t redon .
-docker run --rm -p 8080:8080 -p 6380:6380 -p 9090:9090 redon
-# open http://localhost:8080   (CLI on :6380, Prometheus metrics on :9090/metrics)
+docker run --rm -p 6380:6380 -p 8080:8080 -p 9090:9090 redon
 ```
 
-**3. A prebuilt Windows zip** (no toolchain needed to *run* it). Build the bundle:
+**A prebuilt Windows zip** (no toolchain needed to *run* it). Build the bundle:
 
 ```sh
 powershell -ExecutionPolicy Bypass -File scripts\package.ps1
@@ -146,7 +150,7 @@ That produces `dist\redon-win64.zip`, holding all four executables, the docs, an
 stop them). If you put the repo on GitHub, attach this zip to a Release so anyone
 can download and run it.
 
-**4. From source:**
+**From source** (the classic way):
 
 ```sh
 cmake -S . -B build
