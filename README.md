@@ -122,9 +122,13 @@ Then open **http://127.0.0.1:8080**. Press Ctrl-C in that window to stop both.
 There's more on the gateway in [docs/WEB.md](docs/WEB.md).
 
 **2. Docker** (the only path that needs no compiler — just the Docker daemon
-running):
+running). Pull the prebuilt image, or build it yourself:
 
 ```sh
+# prebuilt (published to GHCR by CI on every release):
+docker run --rm -p 8080:8080 -p 6380:6380 -p 9090:9090 ghcr.io/sau163/redon
+
+# or build locally:
 docker build -t redon .
 docker run --rm -p 8080:8080 -p 6380:6380 -p 9090:9090 redon
 # open http://localhost:8080   (CLI on :6380, Prometheus metrics on :9090/metrics)
